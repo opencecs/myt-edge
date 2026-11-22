@@ -1,0 +1,30 @@
+[Unit]
+StartLimitIntervalSec=0
+Description=Y4 carrier policy through native NetworkManager APIs
+Documentation=man:NetworkManager(8)
+Wants=NetworkManager.service
+Requires=y4-network-ready.service
+After=y4-network-ready.service NetworkManager.service
+PartOf=NetworkManager.service
+
+[Service]
+Type=simple
+ExecCondition=/usr/libexec/y4-board/y4-board-boot --ready
+ExecStart=/usr/libexec/y4-board/y4-network-policy
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=5
+User=root
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+CapabilityBoundingSet=
+ReadWritePaths=/run/y4-board
+MemoryMax=64M
+TasksMax=8
+
+[Install]
+WantedBy=multi-user.target

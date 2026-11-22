@@ -1,0 +1,8 @@
+[Match]
+Path=platform-a0e0000.pcie-*
+Driver=r8125
+
+[Link]
+NamePolicy=
+Name=y4lan
+MACAddressPolicy=none

@@ -1,0 +1,26 @@
+[Unit]
+Description=Y4 MCU and NIC factory initialization
+After=local-fs.target systemd-udev-trigger.service
+Wants=systemd-udev-trigger.service
+Before=NetworkManager.service systemd-networkd.service networking.service y4-boardd.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/y4-board/y4-board-boot
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=y4-board
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+StateDirectory=y4-board
+StateDirectoryMode=0700
+UMask=0077
+KillMode=process
+SendSIGKILL=no
+TimeoutStopSec=infinity
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

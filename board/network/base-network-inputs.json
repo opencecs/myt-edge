@@ -1,0 +1,9 @@
+{
+  "base_archive_sha256": "da7aa675629194323109338a83f21fcfe6ee51a8217275867b2ae981844299ec",
+  "files": {
+    "etc/network/interfaces": {
+      "sha256": "2e77bdb8f1dd3fee558cf5d85ed4b29e3bd5a0571f449c492776223def360314",
+      "kind": "ifupdown"
+    }
+  }
+}

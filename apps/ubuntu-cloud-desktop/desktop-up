@@ -1,0 +1,68 @@
+#!/bin/bash
+set -euo pipefail
+name=${1:?usage: desktop-up NAME [software|cix]}
+renderer=${2:-software}
+[[ "$name" =~ ^[a-z][a-z0-9-]{0,31}$ ]]
+[[ "$renderer" == software || "$renderer" == cix ]]
+instance=ubuntu-desktop-$name
+state="${DESKTOP_STATE_DIR:-/data/ubuntu-cloud-desktop}/$name"
+umask 077
+install -d -m 0700 "$state"
+exec 9>"$state/launch.lock"
+flock -x 9
+install -d -m 0700 -o 10000 -g 10000 "$state/connection"
+if [[ ! -e "$state/password" ]]; then
+    secret=$(mktemp "$state/.password.XXXXXXXX")
+    openssl rand -hex 24 > "$secret"
+    chown 10000:10000 "$secret"
+    mv -T "$secret" "$state/password"
+fi
+options=()
+case "${DESKTOP_COMPOSITOR:-pixman}" in
+    pixman) ;;
+    mali) [[ "$renderer" == cix ]] || { echo 'Mali compositing needs the cix profile' >&2; exit 2; } ;;
+    *) echo 'DESKTOP_COMPOSITOR must be pixman or mali' >&2; exit 2 ;;
+esac
+add_device() {
+    [[ -c "$1" ]]
+    local gid
+    gid=$(stat -Lc %g "$1")
+    options+=(--device "$1:$1:rw")
+    if [[ "$gid" != 0 ]]; then options+=(--group-add "$gid"); fi
+}
+if [[ "$renderer" == cix ]]; then
+    render=${GPU_RENDER_NODE:?select the board DRM render node}
+    [[ "$render" =~ ^/dev/dri/renderD[0-9]+$ ]]
+    add_device "$render"
+    add_device /dev/mali0
+    if [[ ${DESKTOP_COMPOSITOR:-pixman} == mali ]]; then
+        add_device /dev/dma_heap/system
+        options+=(--env DESKTOP_COMPOSITOR=mali --env "GPU_RENDER_NODE=$render")
+    fi
+    vendor_dir=${CIX_DESKTOP_LIB_DIR:-/opt/cixgpu-pro}
+    [[ -d "$vendor_dir/lib" && -r /usr/share/glvnd/egl_vendor.d/40_cix.json ]]
+    options+=(--mount "type=bind,src=$vendor_dir,dst=/opt/cixgpu-pro,readonly" --mount "type=bind,src=/usr/share/glvnd/egl_vendor.d/40_cix.json,dst=/etc/glvnd/egl_vendor.d/40_cix.json,readonly")
+fi
+if [[ ${DESKTOP_VPU:-0} == 1 ]]; then
+    options+=(--env DESKTOP_VPU=1)
+    for type in dec enc; do
+        mapfile -t nodes < <(for f in /sys/class/video4linux/video*/name; do
+            [[ -r "$f" && $(<"$f") == "mvx$type" ]] && basename "$(dirname "$f")"
+        done)
+        [[ ${#nodes[@]} == 1 ]] || { echo "Expected one mvx$type device" >&2; exit 1; }
+        add_device "/dev/${nodes[0]}"
+    done
+fi
+if ! docker network inspect "$instance" >/dev/null 2>&1; then
+    docker network create "$instance" >/dev/null
+fi
+docker run -d --name "$instance" --init --restart unless-stopped \
+    --network "$instance" \
+    --cap-drop ALL --security-opt no-new-privileges --read-only --pids-limit 512 \
+    --memory "${DESKTOP_MEMORY:-2g}" --cpus "${DESKTOP_CPUS:-2}" --shm-size 128m \
+    --tmpfs /tmp:rw,nosuid,nodev,mode=1777,size=256m \
+    --mount "type=volume,src=$instance,dst=/home/desktop" \
+    --mount "type=bind,src=$state/password,dst=/run/desktop-password,readonly" \
+    --mount "type=bind,src=$state/connection,dst=/run/desktop-connection" \
+    "${options[@]}" \
+    "${DESKTOP_IMAGE:-myt/ubuntu-cloud-desktop:24.04}"

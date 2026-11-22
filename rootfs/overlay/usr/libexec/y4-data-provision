@@ -1,0 +1,310 @@
+#!/bin/sh
+# Prepare the fixed data partition before it is mounted. Slot-a and slot-b
+# are rewritten by every OTA package; the data partition never is. A
+# filesystem stamped by this script is checked and grown only when it is
+# smaller than its partition, and never reformatted; any other signature
+# (for example the tail of an earlier whole-disk root layout) is replaced
+# with a fresh filesystem seeded from this slot's /root and /home. Locates
+# the partition by its fixed geometry on the root disk, with devtmpfs and
+# sysfs only: udevd is not up yet.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH LC_ALL=C
+umask 022
+
+MIB=1048576
+# Fixed geometry shared with scripts/gpt.py and uefi/flash/DebianGpt.h:
+# 10 MiB GPT head + 512 MiB ESP + two 16 GiB slots.
+data_start_bytes=$(( (10 + 512 + 2 * 16 * 1024) * MIB ))
+
+state=/run/y4-data-provision
+mkdir -p "$state"
+fail() { echo "y4-data-provision: $*" >&2; exit 1; }
+
+desktop_tmp=
+previous_mounted=no
+data_mounted=no
+cleanup() {
+    if [ -n "$desktop_tmp" ]; then rm -rf -- "$desktop_tmp"; fi
+    if [ "$previous_mounted" = yes ]; then umount "$previous_mount" || true; fi
+    if [ "$data_mounted" = yes ]; then umount "$mountpoint" || true; fi
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+# BEGIN desktop-state helpers
+# The panel previously kept its database in the active root slot. Import it
+# once before the data bind mounts, including SQLite journals and app state.
+# Never replace persistent state, and never replay the other slot's journal.
+desktop_db_valid() {
+    [ -f "$1/nashy.db" ] && [ ! -L "$1/nashy.db" ] || return 1
+    magic=$(od -An -tx1 -N16 "$1/nashy.db" | tr -d ' \n')
+    [ "$magic" = 53514c69746520666f726d6174203300 ]
+}
+
+desktop_has_entries() {
+    [ -d "$1" ] && [ -n "$(find "$1" -mindepth 1 -maxdepth 1 -print -quit)" ]
+}
+
+desktop_has_files() {
+    [ -d "$1" ] && [ -n "$(find "$1" -mindepth 1 ! -type d -print -quit)" ]
+}
+
+desktop_previous_slot() {
+    desktop_old_device=
+    slot_bytes=$((16 * 1024 * MIB))
+    first_slot_start=$(((10 + 512) * MIB))
+    this_start=$(( $(cat "$partition_sys/start") * 512 ))
+    case "$this_start" in
+        "$first_slot_start") previous_start=$((first_slot_start + slot_bytes)) ;;
+        "$((first_slot_start + slot_bytes))") previous_start=$first_slot_start ;;
+        *) fail 'cannot identify the active A/B slot for panel migration' ;;
+    esac
+    [ "$(( $(cat "$partition_sys/size") * 512 ))" -eq "$slot_bytes" ] ||
+        fail 'active slot has unexpected geometry for panel migration'
+    for candidate in "$disk_sys"/"$disk_devname"*[0-9] "$disk_sys"/"$disk_devname"p*[0-9]; do
+        [ -f "$candidate/start" ] && [ -f "$candidate/size" ] || continue
+        [ "$(( $(cat "$candidate/start") * 512 ))" -eq "$previous_start" ] || continue
+        [ "$(( $(cat "$candidate/size") * 512 ))" -eq "$slot_bytes" ] ||
+            fail 'previous slot has unexpected size for panel migration'
+        candidate_name=$(basename "$candidate")
+        desktop_old_device=$(readlink -f "/dev/$candidate_name")
+    done
+    [ -b "$desktop_old_device" ] || fail 'cannot locate the other A/B slot for panel migration'
+    [ "$desktop_old_device" != "$root_device" ] && [ "$desktop_old_device" != "$data_device" ] ||
+        fail 'previous slot aliases an active device'
+    previous_type=$(blkid -p -o value -s TYPE "$desktop_old_device" 2>/dev/null || true)
+    # A full flash can leave the unused slot blank. Only ext4 can hold state
+    # from an earlier Y4 root; never mount an unrelated filesystem.
+    [ "$previous_type" = ext4 ] || { desktop_old_device=; return; }
+    previous_header=$(dumpe2fs -h "$desktop_old_device" 2>/dev/null) ||
+        fail 'cannot inspect the previous slot filesystem'
+    previous_state=$(printf '%s\n' "$previous_header" | awk -F ': *' '$1 == "Filesystem state" {print $2; exit}')
+    [ "$previous_state" = clean ] || fail 'previous slot is not clean; panel state needs manual recovery'
+    if printf '%s\n' "$previous_header" | grep '^Filesystem features:' | grep -qw needs_recovery; then
+        fail 'previous slot needs journal recovery; refusing to import stale panel state'
+    fi
+}
+
+desktop_state_init() {
+    desktop_dest=$mountpoint/myt_desktop
+    [ ! -L "$desktop_dest" ] || fail 'persistent panel state must not be a symlink'
+    if [ -e "$desktop_dest" ] && [ ! -d "$desktop_dest" ]; then
+        fail 'persistent panel state is not a directory'
+    fi
+    if [ -e "$desktop_dest/nashy.db" ] || [ -L "$desktop_dest/nashy.db" ]; then
+        desktop_db_valid "$desktop_dest" || fail 'persistent panel database is invalid'
+    fi
+    if [ -e "$desktop_dest/.y4-state-v1" ] || [ -L "$desktop_dest/.y4-state-v1" ]; then
+        [ -f "$desktop_dest/.y4-state-v1" ] && [ ! -L "$desktop_dest/.y4-state-v1" ] &&
+            grep -qx 'y4-myt-desktop-state v1' "$desktop_dest/.y4-state-v1" ||
+            fail 'persistent panel state marker is invalid'
+        echo 'y4-data-provision: persistent panel state already initialized'
+        return
+    fi
+    if desktop_has_entries "$desktop_dest"; then
+        desktop_db_valid "$desktop_dest" ||
+            fail 'existing persistent panel state has no valid database; refusing to overwrite it'
+        echo 'y4-data-provision: preserving existing persistent panel state'
+        return
+    fi
+
+    desktop_source=
+    desktop_origin=empty
+    desktop_current=/var/lib/myt_desktop
+    [ ! -L "$desktop_current" ] || fail 'slot panel state must not be a symlink'
+    if [ -e "$desktop_current/nashy.db" ] || [ -L "$desktop_current/nashy.db" ]; then
+        desktop_db_valid "$desktop_current" || fail 'active slot has an invalid panel database'
+        desktop_source=$desktop_current
+        desktop_origin=current-slot
+    else
+        desktop_previous_slot
+        if [ -n "$desktop_old_device" ]; then
+            previous_mount=$state/previous-slot
+            mkdir -p "$previous_mount" || fail 'cannot create previous slot mount point'
+            mount -t ext4 -o ro,noload "$desktop_old_device" "$previous_mount" ||
+                fail 'cannot read previous slot for panel migration'
+            previous_mounted=yes
+            previous_state_dir=$previous_mount/var/lib/myt_desktop
+            # These are data checks, not sourced code or executed programs.
+            if [ -f "$previous_mount/etc/debian_version" ] &&
+               [ -f "$previous_mount/usr/lib/systemd/system/myt_desktop.service" ] &&
+               grep -Eq '"rootfs"[[:space:]]*:[[:space:]]*"[0-9]{8}-r[0-9]+"' "$previous_mount/etc/y4-release.json" 2>/dev/null; then
+                [ ! -L "$previous_state_dir" ] || fail 'previous slot panel state must not be a symlink'
+                if [ -e "$previous_state_dir/nashy.db" ] || [ -L "$previous_state_dir/nashy.db" ]; then
+                    desktop_db_valid "$previous_state_dir" || fail 'previous slot has an invalid panel database'
+                    desktop_has_files "$desktop_current" &&
+                        fail 'both slots contain panel state; refusing an ambiguous migration'
+                    desktop_source=$previous_state_dir
+                    desktop_origin=previous-slot
+                elif desktop_has_files "$previous_state_dir"; then
+                    fail 'previous slot has panel files but no database; manual migration required'
+                fi
+            elif desktop_has_entries "$previous_state_dir"; then
+                fail 'panel state found in an unrecognized previous system; manual migration required'
+            fi
+        fi
+        # Fresh installs can provide preinstall assets before the first DB
+        # exists. Keep them only when no valid previous database was found.
+        if [ -z "$desktop_source" ] && [ -d "$desktop_current" ]; then
+            desktop_source=$desktop_current
+            desktop_origin=current-slot-seed
+        fi
+    fi
+
+    desktop_tmp=$(mktemp -d "$mountpoint/.myt-desktop-new.XXXXXX") ||
+        fail 'cannot stage persistent panel state'
+    if [ -n "$desktop_source" ]; then
+        cp -a "$desktop_source/." "$desktop_tmp/" || fail 'cannot copy panel state'
+        if [ -f "$desktop_source/nashy.db" ]; then
+            cmp -s "$desktop_source/nashy.db" "$desktop_tmp/nashy.db" ||
+                fail 'copied panel database does not match its source'
+        fi
+    else
+        chmod 0755 "$desktop_tmp" || fail 'cannot set panel state permissions'
+    fi
+    # Journals/WAL are copied with the DB and are recovered only in the new
+    # writable data directory by SQLite. The source stays byte-for-byte intact.
+    printf 'y4-myt-desktop-state v1\nsource=%s\n' "$desktop_origin" > "$desktop_tmp/.y4-state-v1" ||
+        fail 'cannot mark persistent panel state'
+    sync -f "$desktop_tmp" || fail 'cannot sync staged panel state'
+    if [ -d "$desktop_dest" ]; then
+        rmdir "$desktop_dest" || fail 'persistent panel state changed during migration'
+    fi
+    mv -T "$desktop_tmp" "$desktop_dest" || fail 'cannot publish persistent panel state'
+    desktop_tmp=
+    sync -f "$mountpoint" || fail 'cannot sync persistent panel state'
+    echo "y4-data-provision: panel state initialized from $desktop_origin"
+    if [ "$previous_mounted" = yes ]; then
+        umount "$previous_mount" || fail 'cannot unmount previous slot'
+        previous_mounted=no
+    fi
+}
+
+# An application migration failure must not stop /data or its unrelated
+# /root, /home and container binds. Only the panel's start gate is withheld.
+desktop_state_prepare() {
+    rm -f "$state/myt-desktop-ready" || fail 'cannot clear the panel startup gate'
+    if (
+        # The child owns only its staging directory and previous-slot mount.
+        # The parent must retain the mounted data filesystem for normal boot.
+        data_mounted=no
+        desktop_tmp=
+        previous_mounted=no
+        trap cleanup EXIT
+        trap 'exit 1' HUP INT TERM
+        desktop_state_init
+    ); then
+        printf 'ready\n' > "$state/myt-desktop-ready" ||
+            echo 'y4-data-provision: cannot create panel startup gate; panel stays stopped' >&2
+    else
+        echo 'y4-data-provision: panel state migration failed; other data mounts remain available, panel stays stopped' >&2
+    fi
+}
+# END desktop-state helpers
+
+fstype=$(findmnt --noheadings --raw --output FSTYPE --target /)
+[ "$fstype" = ext4 ] || fail "mounted / is not ext4: $fstype"
+
+major_minor=$(findmnt --noheadings --raw --output MAJ:MIN --target /)
+printf '%s\n' "$major_minor" | grep -Eq '^[0-9]+:[0-9]+$' || fail 'invalid mounted root device identity'
+uevent=/sys/dev/block/$major_minor/uevent
+[ -r "$uevent" ] || fail 'root device has no sysfs block identity'
+devname=$(sed -n 's/^DEVNAME=//p' "$uevent")
+case "$devname" in ''|*..*|*[!a-zA-Z0-9/_-]*) fail 'invalid root block device name' ;; esac
+root_device=$(readlink -f "/dev/$devname")
+[ -b "$root_device" ] || fail "root is not a block device: $root_device"
+
+partition_sys=$(readlink -f "/sys/dev/block/$major_minor")
+[ -f "$partition_sys/partition" ] || fail 'mounted root is not a partition'
+disk_sys=$(dirname "$partition_sys")
+[ -f "$disk_sys/uevent" ] || fail 'root partition has no parent disk in sysfs'
+disk_devname=$(sed -n 's/^DEVNAME=//p' "$disk_sys/uevent")
+case "$disk_devname" in ''|*..*|*[!a-zA-Z0-9/_-]*) fail 'invalid disk device name' ;; esac
+disk_device=$(readlink -f "/dev/$disk_devname")
+[ -b "$disk_device" ] || fail "disk is not a block device: $disk_device"
+
+data_device=
+for entry in "$disk_sys"/$disk_devname*[0-9] "$disk_sys"/$disk_devname*p*[0-9]; do
+    [ -f "$entry/start" ] || continue
+    start=$(cat "$entry/start")
+    case "$start" in ''|*[!0-9]*) continue ;; esac
+    if [ $((start * 512)) -eq "$data_start_bytes" ]; then
+        data_device=$(readlink -f "/dev/${entry##*/}")
+    fi
+done
+[ -b "$data_device" ] || fail "no partition starts at the fixed data offset $data_start_bytes"
+[ "$data_device" != "$root_device" ] || fail 'data partition resolves to the mounted root'
+
+type=$(blkid -p -o value -s TYPE "$data_device" 2>/dev/null || true)
+case "$type" in
+    ''|ext4) ;;
+    *) type=other ;;
+esac
+stamped=no
+mountpoint=$state/mnt
+if [ "$type" = ext4 ]; then
+    mkdir -p "$mountpoint"
+    if mount -t ext4 -o ro "$data_device" "$mountpoint" 2>/dev/null; then
+        data_mounted=yes
+        if [ -f "$mountpoint/.y4-data-stamp" ]; then stamped=yes; fi
+        umount "$mountpoint"
+        data_mounted=no
+    fi
+fi
+
+if [ "$stamped" = yes ]; then
+    # Steady state: never resize or repair a filesystem that already fills
+    # its partition. Panel-state initialization is handled below. Grow (with a forced
+    # check, as resize2fs requires) only when it is smaller than its
+    # partition, which happens only when a future flow flashes a smaller
+    # data image than the actual capacity.
+    echo 'y4-data-provision: stamped data filesystem found'
+    partition_bytes=$(blockdev --getsize64 "$data_device") || fail 'cannot read the data partition size'
+    printf '%s\n' "$partition_bytes" | grep -Eq '^[1-9][0-9]*$' || fail 'invalid data partition size'
+    header=$(dumpe2fs -h "$data_device" 2>/dev/null) || fail 'cannot read the data ext4 superblock'
+    block_count=$(printf '%s\n' "$header" | awk -F ': *' '$1 == "Block count" {print $2; exit}')
+    block_bytes=$(printf '%s\n' "$header" | awk -F ': *' '$1 == "Block size" {print $2; exit}')
+    for number in "$block_count" "$block_bytes"; do
+        printf '%s\n' "$number" | grep -Eq '^[1-9][0-9]*$' || fail 'invalid ext4 block geometry'
+    done
+    filesystem_bytes=$((block_count * block_bytes))
+    echo "y4-data-provision: data filesystem=$filesystem_bytes partition=$partition_bytes"
+    if [ "$filesystem_bytes" -lt "$partition_bytes" ]; then
+        e2fsck -f -p "$data_device" || fail 'data filesystem check failed'
+        resize2fs "$data_device" || fail 'cannot grow the stamped data filesystem'
+    else
+        echo 'y4-data-provision: data filesystem already fills its partition; nothing to do'
+    fi
+else
+    echo "y4-data-provision: provisioning a fresh data filesystem (previous type: ${type:-none})"
+    if [ "$type" != '' ]; then
+        wipefs -a "$data_device" || fail 'cannot clear the stale data signature'
+    fi
+    mkfs.ext4 -q -F -t ext4 -m 1 -L Y4DEB_DATA "$data_device" || fail 'cannot create the data filesystem'
+    mkdir -p "$mountpoint"
+    mount -t ext4 "$data_device" "$mountpoint" || fail 'cannot mount the fresh data filesystem'
+    data_mounted=yes
+    mkdir -p "$mountpoint/home" "$mountpoint/root" "$mountpoint/docker" "$mountpoint/journal" "$mountpoint/containerd" "$mountpoint/samba" "$mountpoint/nfs"
+    cp -a /root/. "$mountpoint/root/" || fail 'cannot seed the data root directory'
+    cp -a /home/. "$mountpoint/home/" || fail 'cannot seed the data home directory'
+    if [ -d /var/log/journal ]; then
+        cp -a /var/log/journal/. "$mountpoint/journal/" || fail 'cannot seed the persistent journal'
+    fi
+    printf 'y4-data v1\n' > "$mountpoint/.y4-data-stamp"
+    sync -f "$mountpoint"
+    umount "$mountpoint"
+    data_mounted=no
+fi
+
+# Existing stamped data also needs the new subtree. This runs before /data
+# and the panel bind mount, with no app process able to open the source DB.
+mkdir -p "$mountpoint"
+mount -t ext4 "$data_device" "$mountpoint" || fail 'cannot mount data for panel state initialization'
+data_mounted=yes
+desktop_state_prepare
+umount "$mountpoint" || fail 'cannot unmount initialized data'
+data_mounted=no
+
+printf 'STATUS=ready\nDATA_DEVICE=%s\n' "$data_device" > "$state/result"
+echo "y4-data-provision: ready device=$data_device"

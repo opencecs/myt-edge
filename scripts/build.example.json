@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "inputs": {
+    "dependencies": "/path/to/dependencies",
+    "kernel_config": "/path/to/assembled/kernel/debian.config",
+    "windows_tools": "/path/to/fastboot-windows"
+  },
+  "boards": {
+    "Y4": {
+      "hardware": "Y4-6187",
+      "inputs": {
+        "kernel_bundle": "/path/to/kernel-bundle/Y4"
+      }
+    },
+    "Y12": {
+      "hardware": "Y12-6187",
+      "inputs": {
+        "kernel_bundle": "/path/to/kernel-bundle/Y12"
+      }
+    }
+  }
+}

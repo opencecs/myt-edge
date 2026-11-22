@@ -1,0 +1,29 @@
+#!/usr/bin/python3
+"""Serve one live H.264 stream per desktop over its private Unix socket."""
+import signal
+import socket
+import subprocess
+from pathlib import Path
+
+signal.signal(signal.SIGTERM, lambda *_: exit(0))
+
+path = Path("/run/desktop-connection/h264.sock")
+path.unlink(missing_ok=True)
+with socket.socket(socket.AF_UNIX) as listener:
+    listener.bind(str(path))
+    listener.listen(1)
+    while True:
+        connection, _ = listener.accept()
+        with connection:
+            subprocess.run(
+                [
+                    "wf-recorder", "--no-dmabuf", "--no-damage",
+                    "--codec=h264_v4l2m2m", "--pixel-format=nv12",
+                    "--codec-param=num_capture_buffers=32",
+                    "--bframes=0", "--codec-param=g=30", "--codec-param=b=3000000",
+                    "--framerate=30", "--buffrate=30", "--muxer=mpegts", "--file=pipe:1",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=connection,
+                check=False,
+            )

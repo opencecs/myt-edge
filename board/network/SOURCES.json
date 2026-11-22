@@ -1,0 +1,30 @@
+{
+  "component": "Y4 Debian NetworkManager integration",
+  "license": "Apache-2.0 for new board/network C/Python/configuration",
+  "debian_base_commit": "045e16d0ec68656f7fd726921660205d90066c42",
+  "opencecs_reference_commit": "e890813f2a6ba3abfbb473883f4ab62556d8e183",
+  "kernel_behavior_reference": {
+    "path": "kernel/linux/drivers/net/bonding/bond_3ad.c",
+    "sha256": "6bfe01068433d943c52e4459f260795b885b53761a144b107703721a41b14198",
+    "unchanged": true,
+    "functions": [
+      "ad_port_selection_logic",
+      "ad_agg_selection_test",
+      "ad_agg_selection_logic"
+    ],
+    "conclusion": "Existing CIX6.1.44 no-partner single-active-aggregator fallback; standard802.3ad can negotiate an actual same-partner aggregate. No lacp_strict backport or new kernel patch."
+  },
+  "primary_references": [
+    "https://www.networkmanager.dev/docs/api/1.42.4/gdbus-org.freedesktop.NetworkManager.Device.html",
+    "https://www.networkmanager.dev/docs/api/1.42.4/settings-ipv4.html",
+    "https://www.networkmanager.dev/docs/api/1.42.4/NetworkManager.conf.html",
+    "https://git.zx2c4.com/wireguard-linux/commit/?id=32b0b8953343eaceaa816a9ead3b6bb66355c64e"
+  ],
+  "validation": {
+    "native_compile": true,
+    "aarch64_compile": true,
+    "runtime_tests": false,
+    "hardware_tests": false,
+    "services_started": false
+  }
+}

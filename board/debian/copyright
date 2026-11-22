@@ -1,0 +1,35 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Y4 Debian board integration
+Source: Internal Y4 Debian source and pinned user-supplied vendor inputs
+
+Files: board/*
+Copyright: 2026 OpenCecs contributors
+License: Apache-2.0
+ The complete Apache License is included in Apache-2.0.txt.
+ Original source-file notices and imported-component provenance remain applicable.
+
+Files: usr/libexec/y4-board/rtnicpg
+Copyright: Realtek vendor, as supplied
+License: Vendor-supplied
+ The executable is a pinned vendor-provided AArch64 PG utility.
+ No open-source or Apache license is asserted for this executable.
+ Preserve the original vendor distribution terms.
+
+Files: lib/modules/*/extra/y4/pgdrv.ko
+ usr/share/doc/y4-board/pgdrv-source/*
+Copyright: Realtek vendor and original source authors
+License: GPL-2
+ The driver declares GPL. Matching pinned pgdrv.c, pgdrv.h and Makefile
+ are included under pgdrv-source, with the GPL-2.0 license in COPYING.
+
+Files: usr/share/y4-board/mcu-package.bin
+Copyright: Original MCU firmware, font, GD32 SDK and LVGL authors
+License: Multiple
+ The package contains compiled MCU firmware with original source notices.
+ See mcu-licenses, LVGL-LICENCE.txt and the source dependency manifest.
+ The project license does not relicense the GD32 vendor library or fonts.
+
+Files: usr/share/doc/y4-board/LVGL-LICENCE.txt
+Copyright: LVGL original authors
+License: MIT
+ See the included LVGL-LICENCE.txt.

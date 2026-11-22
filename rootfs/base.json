@@ -1,0 +1,10 @@
+{
+  "distribution": "Debian",
+  "version": "12",
+  "architecture": "arm64",
+  "init": "systemd",
+  "filesystem": "ext4",
+  "kind": "debootstrap",
+  "manifest": "fetch/rootfs-packages.json",
+  "sha256": "fb1a8ee663b6bfc05f4c1bbc5445bb2f2a08b4e2d3a0a2cfc5a190ace7d86937"
+}

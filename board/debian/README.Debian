@@ -1,0 +1,53 @@
+Y4 Debian board integration
+==========================
+
+This ARM64 package contains the MCU daemon, signed MCU maintenance helper,
+bounded boot initializer, Realtek NIC factory controller, native kernel status
+collector, standard NetworkManager profiles and the MCU display firmware.
+
+A configured production Ed25519 trust/signing key and a PG module compiled for
+the exact installed CIX kernel are required to make an installable package.
+The compile-only developer build deliberately does not invent a key or create
+an unsigned installable fallback.
+
+Installation is passive: there are no preinst/postinst/prerm/postrm scripts,
+Debian triggers, automatic daemon starts or programming operations. The package
+contains enablement links for the three board services; they take effect at
+the next ordinary boot. That boot may perform the explicitly configured bounded
+factory initialization. Existing running services are not stopped at unpack.
+
+Named legacy MCU owners are masked in the data payload. Other services,
+unrelated NetworkManager profiles, /etc/resolv.conf and resolver ownership are
+not rewritten. Regular package configuration is recorded as dpkg conffiles.
+Existing live firmware-update state and credentials under /var/lib/y4-board
+are never part of the package payload and survive package upgrades.
+
+For full firmware image creation, board/install.py operates only on an explicit
+disposable Debian12 root. It refuses / and source-tree roots, validates the exact
+kernel configuration, then uses host dpkg --root with deferred triggers.
+The package has no maintainer actions, and an existing y4-board installation
+with maintainer scripts is refused before unpack. Host depmod writes the image
+module indexes without loading a target module. The image package database
+therefore records the installation normally; this is not merely an untracked
+overlay of binaries.
+
+The image's exact SHA-pinned historical vendor ifupdown file is archived before
+retiring only the old board physical-interface entries. Changed administrator
+files are retained and reported. The normal Debian loopback stanza is supplied
+if missing from the pinned vendor input. No network service or target binary
+runs while staging.
+
+The network profile uses the existing CIX802.3ad single-port fallback when no
+LACP peer replies; actual same-partner negotiation can enable the multi-member
+group. The adapter uses NetworkManager APIs and never owns a second DHCP client.
+Read networking.md for default-route/source-routing and DNS ownership details.
+
+The bundled MCU package is signed and verified as part of packaging. Firmware
+API updates remain separate from Debian package installation and are verified
+again by the target MCU maintenance helper. Only the raw public trust key is
+included; private keys and local signer configuration are excluded.
+
+This delivery has compile evidence only. No package installation, target
+program, unit/integration test, QEMU run, device operation or physical board
+verification was performed for this task. Complete runtime and board acceptance
+in the integrating chat before claiming those scenarios passed.

@@ -1,0 +1,4 @@
+*.zip filter=lfs diff=lfs merge=lfs -text
+*.y4pkg filter=lfs diff=lfs merge=lfs -text
+inputs/dependencies/*.tar.zst filter=lfs diff=lfs merge=lfs -text
+inputs/kernel-pg-reference/*.tar.zst filter=lfs diff=lfs merge=lfs -text

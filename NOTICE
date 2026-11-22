@@ -1,0 +1,8 @@
+MYT Y4 Debian build project
+Build tooling derives from OpenCecs. Copyright 2026 OpenCecs contributors.
+Original source copyright and licensing notices remain applicable.
+Linux kernel licensing: kernel/linux/COPYING and kernel/linux/LICENSES/.
+MCU dependency/font notices: mcu/licenses/ and mcu/DEPENDENCIES.json.
+UEFI vendor SDK, GRUB and Debian are pinned third-party inputs with their original licenses.
+UEFI board overlays retain their source notices; Y4Fan1Boot.c uses BSD-2-Clause-Patent.
+OpenCecs / 魔云腾 names and trademarks are not licensed by the source license.

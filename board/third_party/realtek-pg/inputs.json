@@ -1,0 +1,35 @@
+{
+  "source": "User-supplied linuxpg-2.87.01.tar.bz2",
+  "version": "2.87.0.01",
+  "architecture": "aarch64",
+  "files": [
+    {
+      "file": "pgdrv.c",
+      "bytes": 13854,
+      "sha256": "ebc6bf091c6a146874d666179a90f2f68333f1ddc5df0a2d24b22229ac7ed67c"
+    },
+    {
+      "file": "pgdrv.h",
+      "bytes": 2632,
+      "sha256": "594f39acbe195c07734b5f6fbe1212599244bd237fbaf2648ba6482af48cac63"
+    },
+    {
+      "file": "Makefile",
+      "bytes": 562,
+      "sha256": "00ec56f80781264fd8691b2caa536693c964ab3724e6d7639ca0b271ac5184ca"
+    },
+    {
+      "file": "rtnicpg-aarch64-armv8",
+      "bytes": 1370424,
+      "sha256": "e3c780894f17a6b45ef5da3928d294aca708ffc8826bdf549d80077fdd4d2681"
+    }
+  ],
+  "proven_source": "User-supplied linuxpg-2.87.01.tar.bz2, historical Y4 factory integration",
+  "driver_module_version": "1.00.00",
+  "driver_module_declared_license": "GPL",
+  "binary_license": "Vendor supplied executable; no open-source license asserted",
+  "binary_open_source": false,
+  "runtime_path": "/usr/libexec/opencecs/rtnicpg",
+  "module_path": "/lib/modules/pgdrv.ko",
+  "redistribution_review_required": true
+}

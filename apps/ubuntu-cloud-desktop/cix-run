@@ -1,0 +1,9 @@
+#!/bin/bash
+set -eu
+[[ -c /dev/mali0 && -r /etc/glvnd/egl_vendor.d/40_cix.json ]] || {
+    echo 'This desktop has no CIX GPU assigned' >&2
+    exit 1
+}
+export LD_LIBRARY_PATH=/opt/cixgpu-pro/lib
+export __EGL_VENDOR_LIBRARY_FILENAMES=/etc/glvnd/egl_vendor.d/40_cix.json
+exec "$@"

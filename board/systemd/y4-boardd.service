@@ -1,0 +1,26 @@
+[Unit]
+Description=Y4 MCU telemetry and local signed firmware API
+After=local-fs.target y4-board-init.service
+Wants=y4-board-init.service
+Conflicts=y4-mcud.service mcu-daemon.service mcu-daemon-y4.service mcu-flash.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/y4-boardd
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=y4-board
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+StateDirectory=y4-board
+StateDirectoryMode=0700
+UMask=0077
+KillMode=process
+SendSIGKILL=no
+TimeoutStopSec=infinity
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

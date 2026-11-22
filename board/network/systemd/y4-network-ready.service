@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Y4 board initialization before enabling networking
+Requires=y4-board-init.service
+After=y4-board-init.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=320s
+ExecStart=/bin/sh -ec 'n=0; while [ "$$n" -lt 150 ]; do /usr/libexec/y4-board/y4-board-boot --ready && exit 0; n=$$((n+1)); sleep 2; done; echo "Y4 networking blocked: board initialization did not confirm safe NICs" >&2; exit 1'

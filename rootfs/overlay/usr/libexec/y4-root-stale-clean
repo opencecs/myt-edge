@@ -1,0 +1,145 @@
+#!/bin/sh
+# Clear stale foreign signatures outside the freshly flashed root filesystem,
+# before systemd-remount-fs and the first grow. Protocol 3 keeps UEFI flashing
+# write-only, so labels left by an earlier disk layout (for example ZFS vdev
+# labels at the tail of a previous root partition) are cleaned here, on the
+# installed system, with standard Debian tools. / itself is mounted by
+# PARTUUID, so this pass is hygiene for every other signature consumer.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH LC_ALL=C
+umask 022
+
+MIB=1048576
+
+state=/run/y4-root-stale-clean
+mkdir -p "$state"
+
+fail() { echo "y4-root-stale-clean: $*" >&2; exit 1; }
+warn() { echo "y4-root-stale-clean: warning: $*" >&2; }
+
+fstype=$(findmnt --noheadings --raw --output FSTYPE --target /)
+[ "$fstype" = ext4 ] || fail "mounted / is not ext4: $fstype"
+
+major_minor=$(findmnt --noheadings --raw --output MAJ:MIN --target /)
+printf '%s\n' "$major_minor" | grep -Eq '^[0-9]+:[0-9]+$' || fail 'invalid mounted root device identity'
+uevent=/sys/dev/block/$major_minor/uevent
+[ -r "$uevent" ] || fail 'root device has no sysfs block identity'
+devname=$(sed -n 's/^DEVNAME=//p' "$uevent")
+case "$devname" in ''|*..*|*[!a-zA-Z0-9/_-]*) fail 'invalid root block device name' ;; esac
+root_device=$(readlink -f "/dev/$devname")
+[ -b "$root_device" ] || fail "root is not a block device: $root_device"
+major_hex=$(stat -Lc '%t' "$root_device")
+minor_hex=$(stat -Lc '%T' "$root_device")
+[ "$((0x$major_hex)):$((0x$minor_hex))" = "$major_minor" ] || fail 'root device identity mismatch'
+
+partition_sys=$(readlink -f "/sys/dev/block/$major_minor")
+[ -f "$partition_sys/partition" ] || fail 'mounted root is not a partition'
+disk_sys=$(dirname "$partition_sys")
+[ -f "$disk_sys/uevent" ] || fail 'root partition has no parent disk in sysfs'
+disk_devname=$(sed -n 's/^DEVNAME=//p' "$disk_sys/uevent")
+case "$disk_devname" in ''|*..*|*[!a-zA-Z0-9/_-]*) fail 'invalid disk device name' ;; esac
+disk_device=$(readlink -f "/dev/$disk_devname")
+[ -b "$disk_device" ] || fail "disk is not a block device: $disk_device"
+
+partition_start=$(cat "$partition_sys/start")
+partition_size=$(cat "$partition_sys/size")
+case "$partition_start" in ''|*[!0-9]*) fail 'invalid partition start' ;; esac
+case "$partition_size" in ''|*[!0-9]*) fail 'invalid partition size' ;; esac
+[ "$partition_size" -gt 0 ] || fail 'empty root partition'
+partition_bytes=$((partition_size * 512))
+
+sector=$(cat "$disk_sys/queue/logical_block_size")
+case "$sector" in 512|4096) ;; *) fail "unsupported logical sector size: $sector" ;; esac
+
+# Smallest start among the sibling partitions marks the first partition.
+first_start=
+for entry in "$disk_sys"/$disk_devname*[0-9] "$disk_sys"/$disk_devname*p*[0-9]; do
+    [ -f "$entry/start" ] || continue
+    candidate=$(cat "$entry/start")
+    case "$candidate" in ''|*[!0-9]*) continue ;; esac
+    if [ -z "$first_start" ] || [ "$candidate" -lt "$first_start" ]; then
+        first_start=$candidate
+    fi
+done
+[ -n "$first_start" ] || fail 'no partitions found on the system disk'
+first_start_bytes=$((first_start * 512))
+
+header=$(dumpe2fs -h "$root_device" 2>/dev/null) || fail 'cannot read root ext4 superblock'
+block_count=$(printf '%s\n' "$header" | awk -F ': *' '$1 == "Block count" {print $2; exit}')
+block_bytes=$(printf '%s\n' "$header" | awk -F ': *' '$1 == "Block size" {print $2; exit}')
+case "$block_count" in ''|*[!0-9]*) fail 'invalid ext4 block count' ;; esac
+case "$block_bytes" in 1024|2048|4096|65536) ;; *) fail "invalid ext4 block size: $block_bytes" ;; esac
+fs_bytes=$((block_count * block_bytes))
+
+if [ "$fs_bytes" -ge "$partition_bytes" ]; then
+    echo "y4-root-stale-clean: root filesystem already covers its partition; nothing to clean"
+    exit 0
+fi
+
+zero_range() {
+    # zero_range device start_bytes length_bytes; 512-byte aligned both.
+    device=$1; start=$2; length=$3
+    [ "$length" -gt 0 ] || return 0
+    [ $((start % 512)) -eq 0 ] || fail "unaligned wipe offset: $start"
+    [ $((length % 512)) -eq 0 ] || fail "unaligned wipe length: $length"
+    dd if=/dev/zero of="$device" bs=512 seek=$((start / 512)) \
+        count=$((length / 512)) conv=notrunc status=none
+}
+
+wrote=0
+# 1) Gap between the primary GPT (protective MBR + header + entry array) and
+#    the first partition. Old whole-device labels (for example ZFS label
+#    copies at 256 KiB/512 KiB) survive a flash that only writes the GPT and
+#    partitions; this gap is where whole-disk probes look. Bounded so a
+#    foreign layout cannot turn this into a long wipe.
+gpt_end=$((2 * sector + 16384))
+gap_start=$gpt_end
+gap_stop=$first_start_bytes
+gap_cap=$((gpt_end + 128 * MIB))
+[ "$gap_stop" -gt "$gap_cap" ] && gap_stop=$gap_cap
+if [ "$gap_stop" -gt "$gap_start" ]; then
+    gap_bytes=$((gap_stop - gap_start))
+    zero_range "$disk_device" "$gap_start" "$gap_bytes" \
+        || fail "cannot clear the partition-table gap at $gap_start"
+    wrote=1
+    echo "y4-root-stale-clean: cleared $((gap_bytes / 1024)) KiB between the GPT and the first partition"
+fi
+
+# 2) Root partition tail, the last 1 MiB: every end-of-device probe window
+#    (the recovered ZFS labels all sat within the last ~512 KiB). Only with
+#    at least 2 MiB of slack, so the mounted ext4 is never touched.
+slack=$((partition_bytes - fs_bytes))
+if [ "$slack" -ge $((2 * MIB)) ]; then
+    zero_range "$root_device" $((partition_bytes - MIB)) "$MIB" \
+        || fail 'cannot clear the root partition tail'
+    wrote=1
+    echo 'y4-root-stale-clean: cleared the last 1 MiB of the root partition'
+else
+    warn "only $slack bytes of slack before the partition end; tail wipe skipped"
+fi
+
+if [ "$wrote" -eq 1 ]; then
+    # No udevadm trigger/settle here. Debian 252 orders udevd.service after
+    # tmpfiles-setup-dev -> sysusers -> remount-fs, and this unit runs before
+    # remount-fs, so udevd is guaranteed to start and probe only after this
+    # wipe finished. Calling udevadm here waits for a daemon that cannot have
+    # started yet and stalls the whole boot (observed live 2026-11-08: two
+    # minute stall, then /boot/efi missed its 90 s device window).
+    blockdev --flushbufs "$root_device"
+    blockdev --flushbufs "$disk_device"
+fi
+
+probe_rc=0
+probe=$(blkid -p "$root_device" 2>/dev/null) || probe_rc=$?
+if [ "$probe_rc" -ne 0 ]; then
+    warn "blkid probe returned $probe_rc; continuing, / is mounted by PARTUUID"
+elif printf '%s\n' "$probe" | grep -q 'TYPE="ext4"'; then
+    echo 'y4-root-stale-clean: root partition probes as ext4'
+else
+    warn "blkid does not report ext4 on the root partition: $probe"
+fi
+
+printf 'STATUS=ready\nROOT_DEVICE=%s\nPARTITION_BYTES=%s\nFILESYSTEM_BYTES=%s\n' \
+    "$root_device" "$partition_bytes" "$fs_bytes" > "$state/result"
+echo 'y4-root-stale-clean: ready'

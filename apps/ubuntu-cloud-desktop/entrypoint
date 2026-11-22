@@ -1,0 +1,54 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+export XDG_RUNTIME_DIR
+XDG_RUNTIME_DIR=$(mktemp -d /tmp/desktop.XXXXXXXX)
+export WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 WLR_LIBINPUT_NO_DEVICES=1
+export WLR_RENDERER=pixman
+if [[ ${DESKTOP_COMPOSITOR:-pixman} == mali ]]; then
+    export WLR_RENDERER=gles2
+    export WLR_RENDER_DRM_DEVICE="${GPU_RENDER_NODE:?missing DRM render node}"
+fi
+if [[ -z ${DBUS_SESSION_BUS_ADDRESS:-} ]]; then
+    exec dbus-run-session -- "$0" session
+fi
+cd "$XDG_RUNTIME_DIR"
+openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 1 -subj /CN=cloud-desktop \
+    -keyout tls.key -out tls.crt >/dev/null 2>&1
+password=$(cat /run/desktop-password)
+[[ "$password" =~ ^[a-f0-9]{48}$ ]] || { echo 'Invalid desktop credential' >&2; exit 2; }
+printf 'enable_auth=true\nusername=desktop\npassword=%s\nprivate_key_file=%s/tls.key\ncertificate_file=%s/tls.crt\n' \
+    "$password" "$PWD" "$PWD" > vnc.ini
+unset password
+if [[ "$WLR_RENDERER" == gles2 ]]; then
+    cix-run sway --verbose --config /etc/cloud-desktop/sway.conf &
+else
+    sway --config /etc/cloud-desktop/sway.conf &
+fi
+compositor=$!
+trap 'kill "$compositor" "${vnc:-$compositor}" "${stream:-$compositor}" 2>/dev/null || true' EXIT
+trap 'exit 143' TERM INT
+for ((i=0;i<200;i++)); do
+    shopt -s nullglob
+    sockets=(wayland-*)
+    for socket in "${sockets[@]}"; do
+        if [[ -S "$socket" ]]; then
+            export WAYLAND_DISPLAY=$socket
+            rm -f -- /run/desktop-connection/vnc.sock
+            wayvnc -C "$PWD/vnc.ini" -u /run/desktop-connection/vnc.sock &
+            vnc=$!
+            if [[ ${DESKTOP_VPU:-0} == 1 ]]; then
+                desktop-stream &
+                stream=$!
+                wait -n "$compositor" "$vnc" "$stream"
+            else
+                wait -n "$compositor" "$vnc"
+            fi
+            exit
+        fi
+    done
+    kill -0 "$compositor"
+    sleep .1
+done
+echo 'Wayland compositor did not become ready' >&2
+exit 1

@@ -1,0 +1,26 @@
+[connection]
+id=Y4 2.5G DHCP
+uuid=948fe2c1-4018-4acf-b25b-ecedb97c2500
+type=ethernet
+interface-name=y4lan
+autoconnect=true
+autoconnect-priority=100
+autoconnect-retries=0
+stable-id=y4-lan
+
+[ethernet]
+cloned-mac-address=permanent
+
+[ipv4]
+method=auto
+may-fail=true
+route-table=1025
+route-metric=600
+ignore-auto-dns=false
+
+[ipv6]
+method=auto
+may-fail=true
+route-table=1025
+route-metric=600
+ignore-auto-dns=false

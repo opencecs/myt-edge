@@ -1,0 +1,10 @@
+# Keep the topology names assigned by the Y4 drivers before the standard
+# net_setup_link rule can assign a path-derived fallback.
+SUBSYSTEM!="net", GOTO="y4_net_setup_link_end"
+ACTION=="remove", GOTO="y4_net_setup_link_end"
+IMPORT{builtin}="path_id"
+KERNEL=="y4lan", DRIVERS=="r8125", ENV{ID_PATH}=="platform-a0e0000.pcie-*", NAME="y4lan"
+KERNEL=="y4sfp1", DRIVERS=="r8127", ENV{ID_PATH}=="platform-a0d0000.pcie-*", NAME="y4sfp1"
+KERNEL=="y4sfp2", DRIVERS=="r8127", ENV{ID_PATH}=="platform-a0c0000.pcie-*", NAME="y4sfp2"
+IMPORT{builtin}="net_setup_link"
+LABEL="y4_net_setup_link_end"

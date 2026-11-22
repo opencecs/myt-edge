@@ -1,0 +1,255 @@
+{
+  "repository": "/Y4/ai-workspaces/network-integration-20261027",
+  "commit": "e890813f2a6ba3abfbb473883f4ab62556d8e183",
+  "license": "Apache-2.0 for imported independent userspace; original notices retained.",
+  "files": {
+    "rootfs/modules/mcu_transport.c": {
+      "target": "vendor/mcu_transport.c",
+      "sha256": "b0a7a42dcb7cdd6feb4d7aa052469d9184c80db9b1ed7bd5e56e879932e861b5",
+      "modified": false
+    },
+    "rootfs/modules/mcu_cooling.c": {
+      "target": "vendor/mcu_cooling.c",
+      "sha256": "63d62752fc29127477bd1d3db5b7f6423e6ee5a14c3e88e57eaddeea9583042f",
+      "modified": false
+    },
+    "rootfs/modules/cooling.c": {
+      "target": "vendor/cooling.c",
+      "sha256": "1f4d1d3d333efa78ea4a87d6a4f13b47b6b0503a5e0a817328d0a876a7749e44",
+      "modified": false
+    },
+    "rootfs/modules/tmp75_pm.c": {
+      "target": "vendor/tmp75_pm.c",
+      "sha256": "287d57f064bc02ecb4e8cb3dd8c7c9e2b8657f6d46c4158431f5c2c446c44d28",
+      "modified": false
+    },
+    "rootfs/modules/mcu_fans.c": {
+      "target": "vendor/mcu_fans.c",
+      "sha256": "fb4efbe621b42454e76c8af7d8495485149e4785e2657d1029af3aa2051135fe",
+      "modified": false
+    },
+    "rootfs/modules/mcu_uid.c": {
+      "target": "vendor/mcu_uid.c",
+      "sha256": "be19d1e789ace15bcedc22533376e32748b018dd67f32ab1b4eb4195170ab4f0",
+      "modified": false
+    },
+    "rootfs/modules/mcu_uid_identity.c": {
+      "target": "vendor/mcu_uid_identity.c",
+      "sha256": "1adcc16e3b87279ee45828be84e56bfc5328a28eba212ba46f67889da491c7a5",
+      "modified": false
+    },
+    "rootfs/modules/mcu_health.c": {
+      "target": "vendor/mcu_health.c",
+      "sha256": "61f2ef8c57edfac49f8fab9c1dc9e1d8c6c96cdf46839c89b2a66309b2a48754",
+      "modified": false
+    },
+    "rootfs/modules/mcu_backend.c": {
+      "target": "vendor/mcu_backend.c",
+      "sha256": "6c5d619b897587ed6bf55c73e254815bf70c2f48c89eac9c041a55db6fb41c97",
+      "modified": false
+    },
+    "rootfs/modules/mcu_backend_transport.c": {
+      "target": "vendor/mcu_backend_transport.c",
+      "sha256": "2eaaf72335b0ac41eaed64a473dc140cd92c9a208877bc9d2170d633f44641dc",
+      "modified": false
+    },
+    "rootfs/modules/slots.c": {
+      "target": "vendor/slots.c",
+      "sha256": "9c5c06ad8533562d961eece0310d31b3a5a974ca4887bb622c7560ec99b3fbd2",
+      "modified": true
+    },
+    "rootfs/modules/disk_activity.c": {
+      "target": "vendor/disk_activity.c",
+      "sha256": "f5a35b2aebba2ebcd21648b9e3b5cfef916fca9d4259f54b89890d48c1c1fe59",
+      "modified": true
+    },
+    "rootfs/core/crc32c.c": {
+      "target": "vendor/crc32c.c",
+      "sha256": "cf8a19dab3c0761e9a43bca565c276f06cc843d5df8937f8b65d40fcc9fd1252",
+      "modified": false
+    },
+    "rootfs/include/y4_os_mcu.h": {
+      "target": "vendor/y4_os_mcu.h",
+      "sha256": "a29c918ac537b5f276b8cb6db04704bb4b3be8ba4992a61579a5b998032ad576",
+      "modified": false
+    },
+    "rootfs/include/y4_os_cooling.h": {
+      "target": "vendor/y4_os_cooling.h",
+      "sha256": "040e147be8c66e5d230b77eac0978882b0ecb9d1091808805846c9f761aad691",
+      "modified": false
+    },
+    "rootfs/include/y4_os_tmp75_pm.h": {
+      "target": "vendor/y4_os_tmp75_pm.h",
+      "sha256": "528b6845417abeeb48513560c8fbcd19f2e2c22d463016505ee8ecb478e9e6f8",
+      "modified": false
+    },
+    "rootfs/include/y4_os_mcu_health.h": {
+      "target": "vendor/y4_os_mcu_health.h",
+      "sha256": "c6c3f0423ee1c4a8654690cf87bb25e0ec5ca5d6b39b1fda70cb00d21823c43a",
+      "modified": false
+    },
+    "rootfs/include/y4_os_checksum.h": {
+      "target": "vendor/y4_os_checksum.h",
+      "sha256": "9a7f95726660af3d1db986f3fe278ff8636aa755957911cd8be253bea4f5cc0a",
+      "modified": false
+    },
+    "rootfs/include/y4_os_mcu_backend.h": {
+      "target": "vendor/y4_os_mcu_backend.h",
+      "sha256": "0c84fe32693a2835c093a6d018d817e7b257e4f374ba8e0a50b5c7c7841c5234",
+      "modified": false
+    },
+    "rootfs/include/y4_os_slots.h": {
+      "target": "vendor/y4_os_slots.h",
+      "sha256": "7c9ce63f253e3ce3995cb596c04fe08f774c77d75a13875102f5704ec824b9d1",
+      "modified": false
+    },
+    "rootfs/include/y4_os_disk_activity.h": {
+      "target": "vendor/y4_os_disk_activity.h",
+      "sha256": "18fcaaa17fe6a14f65e6a7d97ab83f6f5d0cab73b204ca0910cfc32f0d263ff3",
+      "modified": false
+    },
+    "rootfs/include/y4_os_temperature_query.h": {
+      "target": "vendor/y4_os_temperature_query.h",
+      "sha256": "3b5c3765421a0e17770fb0e1195e5caae7bc870bc199f651701a1f8a01720d06",
+      "modified": false
+    },
+    "rootfs/include/y4_os_command.h": {
+      "target": "vendor/y4_os_command.h",
+      "sha256": "bea98f2ee49d0ade18a8e7c20d2a58efd4b7c28613059c854d8db77569bc4f69",
+      "modified": false
+    },
+    "rootfs/modules/temperature_query.c": {
+      "target": "vendor/temperature_sample.c",
+      "source_sha256": "2592ff00ce2d6ac33ed5de18ddb8cfeb556b368fe8e7c81dfeeb6bf6d64b1dd9",
+      "sha256": "866b5eb886b8c9f7fa3b4d044d02f86fea2c6618a9bc3c323979ee234c256084",
+      "modified": true,
+      "adaptation": "Keep production y4_temperature_read function only; remove unused product command/query descriptors and IX view include."
+    },
+    "rootfs/modules/ix_inventory.c": {
+      "target": "vendor/ix_inventory.c",
+      "sha256": "4c6c4405a6edc20d60b439868e823bf13133762424152932181015ba95f3e128",
+      "modified": false
+    },
+    "rootfs/modules/ix_link.c": {
+      "target": "vendor/ix_link.c",
+      "sha256": "680943e9b5d0031cb29f3f4c64b726713f229b448b9fa12fa3ba439a22df7e70",
+      "modified": false
+    },
+    "rootfs/modules/ix_topology.c": {
+      "target": "vendor/ix_topology.c",
+      "sha256": "23ed086f59e42cdf98e8f89f6ae6b5e24b714488193c282b1e536c46a47e81d6",
+      "modified": false
+    },
+    "rootfs/modules/ix_probe.c": {
+      "target": "vendor/ix_probe.c",
+      "sha256": "c83b136c6024c7c06bc4633e28b5e48cc50756aa1783401cd87002948c901753",
+      "modified": false
+    },
+    "rootfs/modules/ix_bar_collect.c": {
+      "target": "vendor/ix_bar_collect.c",
+      "sha256": "54f938a3032ff777ead2b8720562045be516df09ada80df2f24e98e3e93a5548",
+      "modified": false
+    },
+    "rootfs/modules/ix_bar_probe.c": {
+      "target": "vendor/ix_bar_probe.c",
+      "sha256": "88a848183b176db8587752c74ee3b0d7348d26a938685742be1873198e50c013",
+      "modified": false
+    },
+    "rootfs/modules/ix_temperature.c": {
+      "target": "vendor/ix_temperature.c",
+      "sha256": "a2f97b2152d745c828c7b8b04cb967e04b2eb368eb37da9132843128633b93a9",
+      "modified": false
+    },
+    "rootfs/modules/ix_thermal_cache.c": {
+      "target": "vendor/ix_thermal_cache.c",
+      "sha256": "ecd31b64e51389795114e9fbe6658e78b309f381cd4a81b30a88941ef7e8e310",
+      "modified": false
+    },
+    "rootfs/modules/ix_thermal_runtime.c": {
+      "target": "vendor/ix_thermal_runtime.c",
+      "sha256": "6d9bb8d18445029730a8859a43a9f1c4d03380b9780bcf0905ccdeaa397624e6",
+      "modified": true
+    },
+    "rootfs/modules/mcu_ix_display.c": {
+      "target": "vendor/mcu_ix_display.c",
+      "sha256": "2209700fdd581edfc62b8656244fe2f38c76f10dd2421e2fa8649e4eed181fe7",
+      "modified": false
+    },
+    "rootfs/service/ix_thermal_sampler.c": {
+      "target": "vendor/ix_thermal_sampler.c",
+      "sha256": "fbc0b3f9db05f99bc7f2a371554909e532f5c67afbe32b9e493b5b8a12f7cea3",
+      "modified": true
+    },
+    "rootfs/include/y4_os_ix_inventory.h": {
+      "target": "vendor/y4_os_ix_inventory.h",
+      "sha256": "e36503b8ab91c0ededfb3c1e2bad45a2f6b2455f78df2ae24040d6f025ac7999",
+      "modified": false
+    },
+    "rootfs/include/y4_os_ix_link.h": {
+      "target": "vendor/y4_os_ix_link.h",
+      "sha256": "049a9d8768600cb613aa752bfa3ffc37ed5cfbe25359be8f5277de133fe7b777",
+      "modified": false
+    },
+    "rootfs/include/y4_os_ix_topology.h": {
+      "target": "vendor/y4_os_ix_topology.h",
+      "sha256": "9ab223beb0aad77fb6b2d86b00585c56f5fec480351b6354d6c70235f5d5f197",
+      "modified": false
+    },
+    "rootfs/include/y4_os_ix_probe.h": {
+      "target": "vendor/y4_os_ix_probe.h",
+      "sha256": "44ce9c6e2e314807087d3fd5defa1649ce6f0bafe03024a408ee9ec6bff3af2b",
+      "modified": false
+    },
+    "rootfs/include/y4_os_ix_bar_query.h": {
+      "target": "vendor/y4_os_ix_bar_query.h",
+      "sha256": "2f120f7e45a048fa745b3b3a3cb21630ecbb5b524c3c2430e7d5679f97170ee7",
+      "modified": false
+    },
+    "rootfs/include/y4_os_ix_thermal.h": {
+      "target": "vendor/y4_os_ix_thermal.h",
+      "sha256": "a3c0c6d956df02abb7abddc990ce60f6301c39a96dac4629e4bcccdd9629eebf",
+      "modified": false
+    },
+    "rootfs/include/ix_bar_probe.h": {
+      "target": "vendor/ix_bar_probe.h",
+      "sha256": "0b45d6f5bab70663bd9e993d9ff5cdba60c7c9071e580cef3d80c620c2847c67",
+      "modified": false
+    },
+    "rootfs/include/y4_os_ix_temperature.h": {
+      "target": "vendor/y4_os_ix_temperature.h",
+      "sha256": "a897fd5cec51966bb8bbb7cbd4ad37f4068a027597bab2619f05967edb4a2e68",
+      "modified": false
+    },
+    "rootfs/include/y4_os_boot_update_context.h": {
+      "target": "vendor/y4_os_boot_update_context.h",
+      "sha256": "7234f426d1e8dddde77914b2c3731741c189492e0490eba3764c21c8de5fbdf5",
+      "modified": false
+    },
+    "rootfs/include/y4_os_mcu_ix_display.h": {
+      "target": "vendor/y4_os_mcu_ix_display.h",
+      "sha256": "13add8405c41a28098c9ad21b746b9b6b9af9c485e298b73ff6bf22c41a5b283",
+      "modified": false
+    },
+    "rootfs/include/y4_os_ix_query.h": {
+      "target": "vendor/y4_os_ix_query.h",
+      "sha256": "c57eabb099439f196b95f2e0adfe431fe169dbaec06f8e9ee41185600f146f81",
+      "modified": false
+    },
+    "rootfs/include/y4_os_ix_snapshot.h": {
+      "target": "y4_os_ix_snapshot.h",
+      "sha256": "9d194e95e65186a0475023a339d23631520dd69ad33b4f5d755f723cfe3f8047",
+      "modified": false
+    },
+    "rootfs/include/y4_os_ix_snapshot_store.h": {
+      "target": "y4_os_ix_snapshot_store.h",
+      "sha256": "eb8555ac15404fea48e91ac22a0eed426d4c29ba922cc44b837f165ab1594ba3",
+      "modified": false
+    },
+    "rootfs/include/y4_os_ix_sampler.h": {
+      "target": "y4_os_ix_sampler.h",
+      "sha256": "f1ce36c541d3ae1d4989fc987cc293518acc250afadaa59afb2d0452ee7280cb",
+      "modified": false
+    }
+  },
+  "modified_note": "modified=true entries carry deliberate board adaptations: slots.c/disk_activity.c match the IX8024 downstream BDFs by domain-independent :c2:0X.0/ suffix (this board enumerates the switch in PCI domain 0003, the handoff assumed 0004); ix_thermal_runtime.c/ix_thermal_sampler.c use CLOCK_BOOTTIME so cache age cannot hide suspend time. worker.c: helper_exec no longer demands a read-only root (upstream ST_RDONLY); the equivalent integrity proof is the daemon-side SHA256 manifest verification, because this image ships a writable ext4 root. ix_power_runner.c: marker_and_worker no longer demands a read-only root (upstream ST_RDONLY on the marker and the worker binary); the equivalent integrity proof is the daemon-side manifest SHA256 verification. ix_power_runner.c: marker_and_worker opens bin/ without O_NOFOLLOW because Debian usrmerge makes /bin a symlink; the worker binary itself keeps the nofollow open and all checks. lab_consumers.c: an empty mountinfo is accepted when the scanned process lives in the scanner's own mount namespace (identical ns inode; chrooted base daemons such as avahi report empty mountinfo), because the caller's base observation already parsed that shared view; every other empty case still fails closed. lab_consumers.c: a successful zero-byte mountinfo read is treated as the kernel-attested empty mount list of that namespace (avahi chroot and dhcpcd unshared-ns base daemons report it); the fd scan still runs. ix_hold_state.c: record_valid pins the BDF domain to 3 (this board enumerates the switch in domain 0003; upstream assumed 0004); bridge identity is verified at runtime. y4_os_ix_hold_state.h/ix_hold_state.c: evidence bit 14 (PCC_OFF) introduced for the switch-native power model and the required HELD/ON evidence sets adapted to the provable signals of this carrier (no EN/PERST GPIOs; PCC changes with the power action)."
+}

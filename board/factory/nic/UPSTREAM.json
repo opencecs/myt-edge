@@ -1,0 +1,89 @@
+{
+  "repository": "OpenCecs internal master",
+  "commit": "e890813f2a6ba3abfbb473883f4ab62556d8e183",
+  "license": "Apache-2.0 (repository-owned standalone userland)",
+  "files": {
+    "modules/nic_factory.c": {
+      "sha256": "1262e3cb9431213736e13545a66028decca1ec2c2559b5c7f3d12bddd725b4f4",
+      "source": "rootfs/modules/nic_factory.c",
+      "local_path": "vendor/modules/nic_factory.c",
+      "local_sha256": "1262e3cb9431213736e13545a66028decca1ec2c2559b5c7f3d12bddd725b4f4"
+    },
+    "include/opencecs_nic_factory.h": {
+      "sha256": "681a963d022c64a6a837e2a99cd832c65f41eb196a8d82c658fb1bb252801ae1",
+      "source": "rootfs/include/opencecs_nic_factory.h",
+      "local_path": "vendor/include/opencecs_nic_factory.h",
+      "local_sha256": "2bf78b259f3af6d7b7de110ee0c5306e22dd1bf61769e2818c353f5d3e7947ef",
+      "adaptation": "Add explicit guarded runner API with held lease FD; legacy run_mode rejects unguarded irreversible writes."
+    },
+    "modules/nic_factory_parse.c": {
+      "sha256": "28e4ba682c04965b8a8571eaeea609a5e295e775e190223a6f2f6442cee666b2",
+      "source": "rootfs/modules/nic_factory_parse.c",
+      "local_path": "vendor/modules/nic_factory_parse.c",
+      "local_sha256": "28e4ba682c04965b8a8571eaeea609a5e295e775e190223a6f2f6442cee666b2"
+    },
+    "modules/nic_factory_vendor.c": {
+      "sha256": "005b47073c12d110a55e07bb0ddf9a4608fde6eb3f137cc7d04c184732993ac0",
+      "source": "rootfs/modules/nic_factory_vendor.c",
+      "local_path": "vendor/modules/nic_factory_vendor.c",
+      "local_sha256": "005b47073c12d110a55e07bb0ddf9a4608fde6eb3f137cc7d04c184732993ac0"
+    },
+    "modules/nic_factory_runner.c": {
+      "sha256": "346876713c4afa3977c8ad39211a1abd7e73d17ccd03f1fc6ceb9161b15401dc",
+      "source": "rootfs/modules/nic_factory_runner.c",
+      "local_path": "vendor/modules/nic_factory_runner.c",
+      "local_sha256": "d7461a2064dd56c8d04d343b3eb44ab987ddeadd16c84c06eaf79af8a5766129",
+      "adaptation": "Debian guarded-write launch: no parent-death kill for OTP writes; inherit whole-NIC flock FD across exec. Read-only death/timeout kill policy retained."
+    },
+    "modules/network_permanent.c": {
+      "sha256": "735b601eddd6b528e02b0c2a41dbc34216d07cf251737204e1ab39d8277cfc19",
+      "source": "rootfs/modules/network_permanent.c",
+      "local_path": "vendor/modules/network_permanent.c",
+      "local_sha256": "735b601eddd6b528e02b0c2a41dbc34216d07cf251737204e1ab39d8277cfc19"
+    },
+    "include/y4_os_network_permanent.h": {
+      "sha256": "16fec26873662c88183b393fb24ae4530ca82b10fe100d11dac334d571f78a65",
+      "source": "rootfs/include/y4_os_network_permanent.h",
+      "local_path": "vendor/include/y4_os_network_permanent.h",
+      "local_sha256": "16fec26873662c88183b393fb24ae4530ca82b10fe100d11dac334d571f78a65"
+    },
+    "modules/mcu_uid_snapshot.c": {
+      "sha256": "d954e6754dc319102a85577f924bf3aa90b4153a7f7d07043355ffca350f6ec8",
+      "source": "rootfs/modules/mcu_uid_snapshot.c",
+      "local_path": "vendor/modules/mcu_uid_snapshot.c",
+      "local_sha256": "d954e6754dc319102a85577f924bf3aa90b4153a7f7d07043355ffca350f6ec8"
+    },
+    "include/y4_os_mcu_uid_snapshot.h": {
+      "sha256": "55c05cadd40a0cab1d0d608beafd00efc77185b46dc1581f962ccaf58fa50a25",
+      "source": "rootfs/include/y4_os_mcu_uid_snapshot.h",
+      "local_path": "vendor/include/y4_os_mcu_uid_snapshot.h",
+      "local_sha256": "55c05cadd40a0cab1d0d608beafd00efc77185b46dc1581f962ccaf58fa50a25"
+    },
+    "include/y4_os_checksum.h": {
+      "sha256": "9a7f95726660af3d1db986f3fe278ff8636aa755957911cd8be253bea4f5cc0a",
+      "source": "rootfs/include/y4_os_checksum.h",
+      "local_path": "vendor/include/y4_os_checksum.h",
+      "local_sha256": "9a7f95726660af3d1db986f3fe278ff8636aa755957911cd8be253bea4f5cc0a"
+    },
+    "modules/mcu_uid_store.c": {
+      "sha256": "3795ef9fbe892fd1832f440b45f3bed330887a1ab2c1ff1c33d07c28be423280",
+      "source": "rootfs/modules/mcu_uid_store.c",
+      "local_path": "vendor/modules/mcu_uid_store.c",
+      "local_sha256": "3795ef9fbe892fd1832f440b45f3bed330887a1ab2c1ff1c33d07c28be423280"
+    },
+    "core/crc32c.c": {
+      "sha256": "cf8a19dab3c0761e9a43bca565c276f06cc843d5df8937f8b65d40fcc9fd1252",
+      "source": "rootfs/core/crc32c.c",
+      "local_path": "vendor/core/crc32c.c",
+      "local_sha256": "cf8a19dab3c0761e9a43bca565c276f06cc843d5df8937f8b65d40fcc9fd1252"
+    },
+    "service/opencecs-nic-factory.c": {
+      "sha256": "8f169eb4ad41e38827dd8698e9e601d18f1acf654a98714b61b35677efc6b1a3",
+      "source": "rootfs/service/opencecs-nic-factory.c",
+      "adapter": "Debian paths/cohort, per-attempt receipt+flock, durable pre-write unknown barrier, refusal of unresolved prior attempts, independent degraded kernel inspection, validated UID receipts",
+      "local_path": "y4_nic_factory.c",
+      "local_sha256": "9493ed62fe36ceab7171c021b663c613c13291a411816d7966bdc3c4e8d62106"
+    }
+  },
+  "safety_boundary": "Inherited lease cannot prove vendor custody alone. Any protected write-attempted without trusted complete refuses automatic replay or driver restoration until manual recovery."
+}

@@ -1,0 +1,8 @@
+{
+  "commit": "e890813f2a6ba3abfbb473883f4ab62556d8e183",
+  "files": {
+    "build_realtek_pg.py": "rootfs/tools/build-realtek-pg.py",
+    "build_mcu_package.py": "rootfs/tools/build-mcu-package.py"
+  },
+  "scope": "offline compiler/signing utilities; no device execution"
+}

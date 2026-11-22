@@ -1,0 +1,92 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Y4 video decoder acceptance</title>
+<style>body{margin:0;background:#17202a;color:#fff;font:16px sans-serif}header{padding:12px}video{display:block;width:min(96vw,1280px);max-height:82vh;margin:auto;background:#000}pre{padding:8px;font-size:12px;white-space:pre-wrap}video:fullscreen{width:100vw;height:100vh;max-height:none;object-fit:contain}</style></head>
+<body><header id="title">Y4 hardware decode test — independent test profile</header><main id="host"></main><pre id="info"></pre>
+<script>
+"use strict";
+window.testState = {events: [], failures: []};
+window.sample = function() {
+  const v = window.video, s = window.testState;
+  if (!v) return {ready:false};
+  const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : {};
+  const r = {case:s.case, ready:true, currentTime:v.currentTime, duration:Number.isFinite(v.duration)?v.duration:null,
+    paused:v.paused, ended:v.ended, seeking:v.seeking, readyState:v.readyState,
+    networkState:v.networkState, width:v.videoWidth, height:v.videoHeight,
+    presentedFrameCallbacks:s.presentedFrameCallbacks||0, lastPresentedFrame:s.lastPresentedFrame||null,
+    totalVideoFrames:q.totalVideoFrames || v.webkitDecodedFrameCount || 0,
+    droppedVideoFrames:q.droppedVideoFrames || v.webkitDroppedFrameCount || 0,
+    corruptedVideoFrames:q.corruptedVideoFrames || 0,
+    buffered:Array.from({length:v.buffered.length}, (_,i)=>[v.buffered.start(i),v.buffered.end(i)]),
+    fullscreen:!!document.fullscreenElement, error:v.error?{code:v.error.code,message:v.error.message}:null,
+    failures:s.failures.slice(), events:s.events.slice(), mseAppends:s.mseAppends || 0,
+    support:s.support};
+  document.getElementById("info").textContent=JSON.stringify(r,null,2);
+  return r;
+};
+window.startCase = async function(spec) {
+  if (window.video) { window.video.pause(); window.video.removeAttribute("src"); window.video.load(); }
+  if (window.objectURL) URL.revokeObjectURL(window.objectURL);
+  const v=document.createElement("video");
+  v.controls=true;v.muted=true;v.preload="auto";v.playsInline=true;
+  window.video=v; document.getElementById("host").replaceChildren(v);
+  window.testState={case:spec.name,events:[],failures:[],mseAppends:0,presentedFrameCallbacks:0,
+    support:{file:v.canPlayType(spec.mime),mse:spec.mse?MediaSource.isTypeSupported(spec.mime):null}};
+  if (v.requestVideoFrameCallback) {
+    const onFrame=(now,metadata)=>{
+      if(window.video!==v)return;
+      window.testState.presentedFrameCallbacks++;
+      window.testState.lastPresentedFrame={mediaTime:metadata.mediaTime,presentedFrames:metadata.presentedFrames,
+        width:metadata.width,height:metadata.height,processingDuration:metadata.processingDuration||0};
+      v.requestVideoFrameCallback(onFrame);
+    };
+    v.requestVideoFrameCallback(onFrame);
+  }
+  document.getElementById("title").textContent=spec.label;
+  for (const name of ["loadedmetadata","loadeddata","playing","pause","waiting","stalled","seeking","seeked","ended","error","resize"]) {
+    v.addEventListener(name,()=>window.testState.events.push({event:name,time:performance.now(),mediaTime:v.currentTime}));
+  }
+  try {
+    if (spec.mse) {
+      if (!MediaSource.isTypeSupported(spec.mime)) throw new Error("MSE type unsupported: "+spec.mime);
+      const ms=new MediaSource();window.mediaSource=ms;
+      const opened=new Promise((resolve,reject)=>{
+        const timer=setTimeout(()=>reject(new Error("MSE sourceopen timeout")),5000);
+        ms.addEventListener("sourceopen",()=>{clearTimeout(timer);resolve();},{once:true});
+      });
+      window.objectURL=URL.createObjectURL(ms);v.src=window.objectURL;await opened;
+      const response=await fetch(spec.url);
+      if (!response.ok) throw new Error("HTTP "+response.status);
+      const data=new Uint8Array(await response.arrayBuffer());
+      const sb=ms.addSourceBuffer(spec.mime);
+      for (let offset=0;offset<data.length;offset+=524288) {
+        await new Promise((resolve,reject)=>{
+          const timer=setTimeout(()=>reject(new Error("MSE update timeout")),5000);
+          sb.addEventListener("updateend",()=>{clearTimeout(timer);resolve();},{once:true});
+          sb.addEventListener("error",()=>{clearTimeout(timer);reject(new Error("MSE append error"));},{once:true});
+          sb.appendBuffer(data.subarray(offset,Math.min(data.length,offset+524288)));
+        });
+        window.testState.mseAppends++;
+      }
+      ms.endOfStream();
+    } else {v.src=spec.url;v.load();}
+    await v.play();
+    return window.sample();
+  } catch (error) {
+    window.testState.failures.push(String(error));return window.sample();
+  }
+};
+window.seekTo = async function(seconds) {
+  const v=window.video;
+  return await new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error("seek timeout")),8000);
+    v.addEventListener("seeked",()=>{clearTimeout(timer);resolve(window.sample());},{once:true});
+    v.currentTime=seconds;
+  });
+};
+window.toggleFullscreen = async function(enabled) {
+  try {
+    if (enabled) await window.video.requestFullscreen(); else if(document.fullscreenElement) await document.exitFullscreen();
+    return {ok:!!document.fullscreenElement===enabled,state:window.sample()};
+  } catch(error) {return {ok:false,error:String(error),state:window.sample()};}
+};
+</script></body></html>

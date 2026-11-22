@@ -1,0 +1,61 @@
+#!/bin/sh
+# Expand only the mounted ext4 root filesystem, using Debian's standard tools.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH LC_ALL=C
+umask 022
+
+state=/run/y4-root-grow
+mkdir -p "$state"
+rm -f "$state/result"
+fail() { echo "y4-root-grow: $*" >&2; exit 1; }
+
+fstype=$(findmnt --noheadings --raw --output FSTYPE --target /)
+[ "$fstype" = ext4 ] || fail "mounted / is not ext4: $fstype"
+options=$(findmnt --noheadings --raw --output OPTIONS --target /)
+case ",$options," in *,rw,*) ;; *) fail 'mounted / is not writable' ;; esac
+
+major_minor=$(findmnt --noheadings --raw --output MAJ:MIN --target /)
+printf '%s\n' "$major_minor" | grep -Eq '^[0-9]+:[0-9]+$' || fail 'invalid mounted root device identity'
+uevent=/sys/dev/block/$major_minor/uevent
+[ -r "$uevent" ] || fail "root device has no sysfs block identity: $major_minor"
+devname=$(sed -n 's/^DEVNAME=//p' "$uevent")
+case "$devname" in ''|/*|*..*|*[!a-zA-Z0-9/_-]*) fail 'invalid root block device name' ;; esac
+root_device=$(readlink -f "/dev/$devname")
+[ -b "$root_device" ] || fail "root is not a block device: $root_device"
+major_hex=$(stat -Lc '%t' "$root_device")
+minor_hex=$(stat -Lc '%T' "$root_device")
+[ "$((0x$major_hex)):$((0x$minor_hex))" = "$major_minor" ] || fail 'root device identity mismatch'
+partition_bytes=$(blockdev --getsize64 "$root_device")
+printf '%s\n' "$partition_bytes" | grep -Eq '^[1-9][0-9]*$' || fail 'invalid root partition size'
+
+read_filesystem() {
+    header=$(dumpe2fs -h "$root_device" 2>/dev/null) || fail 'cannot read root ext4 superblock'
+    block_count=$(printf '%s\n' "$header" | awk -F ': *' '$1 == "Block count" {print $2; exit}')
+    block_bytes=$(printf '%s\n' "$header" | awk -F ': *' '$1 == "Block size" {print $2; exit}')
+    filesystem_uuid=$(printf '%s\n' "$header" | awk -F ': *' '$1 == "Filesystem UUID" {print $2; exit}')
+    for number in "$block_count" "$block_bytes"; do
+        printf '%s\n' "$number" | grep -Eq '^[1-9][0-9]*$' || fail 'invalid ext4 block geometry'
+    done
+    case "$filesystem_uuid" in ''|*[!0-9a-fA-F-]*) fail 'invalid ext4 UUID' ;; esac
+    filesystem_bytes=$((block_count * block_bytes))
+}
+
+read_filesystem
+before_bytes=$filesystem_bytes
+[ "$filesystem_bytes" -le "$partition_bytes" ] || fail 'root filesystem exceeds its partition'
+echo "y4-root-grow: root=$root_device before=$before_bytes partition=$partition_bytes"
+resize2fs "$root_device"
+sync -f /
+read_filesystem
+expected_blocks=$((partition_bytes / block_bytes))
+[ "$block_count" -eq "$expected_blocks" ] || fail 'root filesystem did not grow to the available partition capacity'
+
+temporary=$state/result.$$
+{
+    printf 'STATUS=ready\nROOT_DEVICE=%s\nMAJOR_MINOR=%s\n' "$root_device" "$major_minor"
+    printf 'PARTITION_BYTES=%s\nFILESYSTEM_BYTES=%s\nBEFORE_BYTES=%s\n' "$partition_bytes" "$filesystem_bytes" "$before_bytes"
+    printf 'FILESYSTEM_UUID=%s\n' "$filesystem_uuid"
+} > "$temporary"
+mv -f "$temporary" "$state/result"
+echo "y4-root-grow: ready filesystem=$filesystem_bytes partition=$partition_bytes uuid=$filesystem_uuid"

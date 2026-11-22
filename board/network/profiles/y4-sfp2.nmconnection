@@ -1,0 +1,18 @@
+[connection]
+id=Y4 10G member 2
+uuid=948fe2c1-4018-4acf-b25b-ecedb97c1002
+type=ethernet
+interface-name=y4sfp2
+master=948fe2c1-4018-4acf-b25b-ecedb97c1000
+slave-type=bond
+autoconnect=true
+autoconnect-priority=100
+autoconnect-retries=0
+
+[ethernet]
+
+[ipv4]
+method=disabled
+
+[ipv6]
+method=disabled

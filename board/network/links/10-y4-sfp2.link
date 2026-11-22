@@ -1,0 +1,8 @@
+[Match]
+Path=platform-a0c0000.pcie-*
+Driver=r8127
+
+[Link]
+NamePolicy=
+Name=y4sfp2
+MACAddressPolicy=none

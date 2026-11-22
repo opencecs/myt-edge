@@ -1,0 +1,36 @@
+# Generated firmware and delivery directories
+/builds/
+/delivery/
+Y4-*-full.zip
+Y12-*-full.zip
+Y4-*-ota.zip
+Y12-*-ota.zip
+*.y4pkg
+*.y12pkg
+rootfs.img
+rootfs.ext4
+rootfs_sparse.ext4
+/releases/**/*.zip
+/releases/**/*.img
+/releases/**/*.ext4
+/releases/**/*.raw
+/releases/**/*.bin
+
+# Build and release outputs stay out of Git.
+/dist/
+out/
+/releases/**/*.y4pkg
+/releases/**/*.y12pkg
+/releases/**/*.tar
+/releases/**/*.tar.zst
+/releases/**/*.tar.gz
+/releases/**/*.tar.xz
+/releases/**/*.7z
+/releases/**/*.deb
+/releases/**/*.elf
+/releases/**/*.hex
+/releases/**/*.ko
+
+# Python build products
+__pycache__/
+*.pyc

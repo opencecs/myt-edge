@@ -1,0 +1,12 @@
+{
+  "GPL-2.0.txt": {
+    "source": "kernel/linux/LICENSES/preferred/GPL-2.0",
+    "source_baseline": "045e16d0ec68656f7fd726921660205d90066c42",
+    "sha256": "f6b78c087c3ebdf0f3c13415070dd480a3f35d8fc76f3d02180a407c1c812f79"
+  },
+  "LVGL-LICENCE.txt": {
+    "source": "pinned external MCU vendor LVGL/LICENCE.txt",
+    "dependency_manifest": "mcu/DEPENDENCIES.json",
+    "sha256": "27a80bd36832ab42d35ad60c08b2b230a807a9bc0d58e94ec1531543dc49cbe8"
+  }
+}
