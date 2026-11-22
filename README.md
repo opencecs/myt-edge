@@ -1,22 +1,34 @@
 # MYT Edge
 
-Build and package Debian 12 for MYT Y4 and Y12. Both boards use the same public build tools. Select the physical board with `--board Y4` or `--board Y12`.
+MYT Edge builds a Debian 12 ARM64 system for the MYT Y4 and Y12 appliances based on CIX CP6187 (Sky1). It provides a host for networked NVMe storage, containerized services and PCIe accelerator workloads. The system includes a Debian desktop, board monitoring and an A/B system update mechanism.
+
+## Supported hardware
+
+| Board | Downstream PCIe slots | Cooling and monitoring | Build option |
+| --- | --- | --- | --- |
+| MYT Y4 (V11) | Four PCIe Gen4 ×4 slots | On-board status display, three MCU-controlled chassis fans and an independent SoC fan | `--board Y4` |
+| MYT Y12 | Four PCIe Gen4 ×2 slots and eight Gen4 ×1 slots | Two SoC fan-control groups, six tachometer inputs and per-slot MCU power readings | `--board Y12` |
+
+Both boards provide a 2.5GbE LAN port and two 10GbE optical ports. See the [platform overview](docs/PLATFORM-OVERVIEW.md) for hardware and workload requirements.
+
+## Documentation
+
+| Guide | Covers |
+| --- | --- |
+| [Build guide](docs/DUAL-BOARD-BUILD.md) | Inputs, source assembly and release builds for Y4 and Y12 |
+| [Development guide](docs/DEVELOPMENT-HANDOFF.md) | Where to make changes and how to validate them |
+| [Fastboot and OTA guide](docs/BUILD-AND-FLASH-GUIDE.md) | Package verification, installation, and system updates |
+| [Board differences](docs/Y4-Y12-DIFFERENCES.md) and [board API](docs/board-api.md) | Board selection, slot mapping and management interfaces |
+| [Release requirements](RELEASES.md) | Versioning, checksums and release validation records |
+
+## Source repositories
 
 | Repository | Contents |
 | --- | --- |
-| [myt-edge](https://github.com/opencecs/myt-edge) | Build orchestration, board services, image packaging, OTA packaging and Fastboot tools |
+| [myt-edge](https://github.com/opencecs/myt-edge) | Build orchestration, board services, packaging and Fastboot tools |
 | [cix-kernel](https://github.com/opencecs/cix-kernel) | Linux kernel, Y4 and Y12 device trees, and kernel configuration |
 | [cix-rootfs](https://github.com/opencecs/cix-rootfs) | Debian package inputs, desktop configuration, root filesystem overlays and vendor runtime files |
 
-Both public and maintainer builds use the GitHub `main` branches listed above. Pin the three commits for each build. Keep previous local source trees only for historical reference.
+Both public and maintainer builds pin commits from the same three GitHub repositories. Public builds use approved signed MCU packages and panel binaries from the release maintainer. Supply the matching official `myt-spi.bin` for a full Fastboot package. Prepare a system OTA separately with a signing key that the target device trusts.
 
-Start with the [dual-board build guide](docs/DUAL-BOARD-BUILD.md). The public build uses approved signed MCU assets and desktop panel binaries together with the build dependencies listed there. Obtain the binaries and matching checksums from the maintainer.
-
-- Add the matching official `myt-spi.bin` to generate a standard full Fastboot ZIP.
-- Use the resulting system image and matching kernel files to prepare a system OTA. The device must trust the OTA signature.
-
-The public system checks permanent MAC addresses before enabling usable factory-provisioned NICs. Manufacturing handles NIC NVM provisioning separately.
-
-See the [build and flash guide](docs/BUILD-AND-FLASH-GUIDE.md), [board differences](docs/Y4-Y12-DIFFERENCES.md) and [board API](docs/board-api.md).
-
-The maintainers compile the boot firmware, MCU and panel from private source repositories. MCU package signing takes place in the internal release environment. The public build verifies and packages the approved binary assets. See the [maintainer build procedure](docs/DUAL-BOARD-BUILD.md#maintainer-build-for-private-components) and [release evidence](RELEASES.md).
+On the public image, the board service checks permanent MAC addresses before allowing usable factory-provisioned NICs onto the network. Manufacturing handles NIC NVM provisioning separately. Boot firmware, MCU software and the panel are compiled by the maintainers, who sign MCU packages in their internal release environment.

@@ -13,6 +13,8 @@ The full ZIP contains `images/myt-spi.bin`, the system image, boot and GPT image
 
 ### Verify the package and select the device
 
+On Linux, install Fastboot and Python 3 on the flash host. The Windows package includes Fastboot and uses Windows PowerShell for the flash script. The board serial console uses 57600 baud.
+
 1. Extract the ZIP and read its `README.txt`. On Linux, run `sha256sum -c SHA256SUMS` in the extracted directory. On Windows, run `Flash.cmd -VerifyOnly` from Command Prompt in the same directory.
 2. Connect the board to the host's USB Fastboot connection and enter Fastboot. On a running MYT system, an administrator can use `sudo systemctl reboot bootloader`.
 3. Run `fastboot devices` and replace `SERIAL` in the commands below with the exact serial for the intended board. On Windows, use the included `.\tools\fastboot.exe` in place of `fastboot`.
@@ -56,7 +58,7 @@ On Windows, run from Command Prompt in the extracted package directory.
 Flash.cmd -SerialNumber SERIAL && .\tools\fastboot.exe -s SERIAL reboot
 ```
 
-Run the reboot command after the script reports success. The scripts verify the selected device and disk geometry before writing. If they stop, keep the flash logs and correct the reported problem before retrying. First boot provisions or mounts `/data`, expands the active root filesystem and runs the board initialization service.
+Run the reboot command after the script reports success. The scripts verify the selected device and disk geometry before writing. If they stop, keep the files under the extracted package’s `logs/` directory and correct the reported problem before retrying. First boot provisions or mounts `/data`, expands the active root filesystem and runs the board initialization service.
 
 ## System OTA
 
