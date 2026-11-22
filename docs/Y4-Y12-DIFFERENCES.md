@@ -12,7 +12,7 @@ See the [board API](board-api.md) for the current interface contract.
 
 ## Y12 slot mapping
 
-| Physical slot | IX8024 downstream device | INA3221 address / channel | Measurement channel | Run LED GPIO offset |
+| Physical slot | PCIe switch downstream device number | INA3221 address / channel | Measurement channel | Run LED GPIO offset |
 | --- | --- | --- | --- | --- |
 | 1 | 8 | 0x42 / 3 | 9 | 8 |
 | 2 | 7 | 0x42 / 2 | 8 | 7 |
