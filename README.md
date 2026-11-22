@@ -8,6 +8,8 @@ Build and package Debian 12 for MYT Y4 and Y12. Both boards use the same public 
 | [cix-kernel](https://github.com/opencecs/cix-kernel) | Linux kernel, Y4 and Y12 device trees, and kernel configuration |
 | [cix-rootfs](https://github.com/opencecs/cix-rootfs) | Debian package inputs, desktop configuration, root filesystem overlays and vendor runtime files |
 
+Both public and maintainer builds use the GitHub `main` branches listed above. Pin the three commits for each build. Keep previous local source trees only for historical reference.
+
 Start with the [dual-board build guide](docs/DUAL-BOARD-BUILD.md). A source checkout also needs the build dependencies and board-specific binaries listed in that guide. Obtain official binaries and their checksums from the maintainer's release channel.
 
 - Build a system image using the official MCU assets and desktop panel binary.
@@ -17,3 +19,5 @@ Start with the [dual-board build guide](docs/DUAL-BOARD-BUILD.md). A source chec
 On factory-provisioned hardware, the public build can omit the Realtek programmer. The board service checks the installed network devices and their permanent MAC addresses before enabling networking. NIC NVM provisioning is a separate manufacturing operation.
 
 See the [build and flash guide](docs/BUILD-AND-FLASH-GUIDE.md), [board differences](docs/Y4-Y12-DIFFERENCES.md) and [board API](docs/board-api.md).
+
+Authorized maintainers use the same build scripts to compile the private boot firmware, MCU and panel repositories and consume their binary outputs. See the [maintainer build procedure](docs/DUAL-BOARD-BUILD.md#maintainer-build-for-private-components).

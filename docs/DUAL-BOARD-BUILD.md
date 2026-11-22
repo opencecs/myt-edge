@@ -4,7 +4,15 @@ Use a Linux build host with enough space for the kernel, the root filesystem sta
 
 ## Obtain the inputs
 
-Pin the three public source checkouts to commits. Use Linux for the kernel checkout because the source tree contains names such as `aux.c` that Windows treats as reserved.
+Use the three GitHub `main` branches for both public and maintainer builds. Run the initial checkouts on Linux. The kernel source has file names such as `aux.c` that Windows treats as reserved.
+
+```sh
+git clone --branch main https://github.com/opencecs/myt-edge.git
+git clone --branch main https://github.com/opencecs/cix-kernel.git
+git clone --branch main https://github.com/opencecs/cix-rootfs.git
+```
+
+Pin the three source revisions as full commits for each build. The assembly command records them in `SOURCES.json` and creates a fresh tree. Existing local source trees are kept for historical reference.
 
 | Input | Where it is used |
 | --- | --- |
@@ -18,7 +26,7 @@ Pin the three public source checkouts to commits. Use Linux for the kernel check
 | Windows Fastboot tools | Windows flashing support in the full package |
 | External OTA signing key | OTA signing. Its corresponding public key must already be trusted on the installation target |
 
-The release operator obtains each board-specific binary through an approved binary channel and checks the digest from the same release metadata. Keep local config files and signing keys outside the Git checkout.
+The release operator obtains each board-specific binary through an approved binary channel and checks the digest from the same release metadata. Keep local config files and signing keys outside the Git checkout. The public build omits Realtek PG. The board service checks the NICs and their permanent MAC addresses before enabling networking, so factory NIC provisioning must already be complete.
 
 ## Assemble the source tree
 
@@ -32,7 +40,7 @@ python3 scripts/assemble_sources.py \
 cd "$ASSEMBLED"
 ```
 
-Use `scripts/build.example.json` as the starting point for your local config. Supply the build input paths for both boards you plan to build. Use the existing kernel bundle interface if you already have a matching bundle; see `python3 scripts/build.py --help` for the available options.
+Use `scripts/build.example.json` as the starting point for your local config. Supply the build input paths for both boards you plan to build. Supply the matching Linux 6.6.89 kernel bundle for the selected board. Follow the [kernel build instructions](https://github.com/opencecs/cix-kernel#构建当前内核包) to generate this input.
 
 ## Build and package
 
