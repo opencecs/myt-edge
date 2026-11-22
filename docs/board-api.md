@@ -1,7 +1,6 @@
 # Y4 / Y12 板卡管理 API（y4-boardd）
 
-版本：2026-11-12-r3（随 r191 固件交付；r3=全量 API 测试 49/49 后回填实测样例、修正 405 语义、补 GET /api/v1/mcu/firmware、fans 门禁实测细节）　来源：与 `board/daemon/{api,status,update,ota,monitor}.c` 及 `board/daemon/vendor/{fan_policy,fan1_tach}.c`、MCU `include/protocol.h`（0.1.39）逐字段核对，样例为 r191 实板抓取
-当前板型风扇接口见第 6 节。r191 字段快照、错误码及实测样例保留其原始版本含义；新客户端先从 /api/v1/version 读取 device，再选择对应结构。
+接口由 `board/daemon` 实现。客户端先从 `GET /api/v1/version` 读取 `device`，再选择对应板型的请求和字段。正式系统的升级和校验流程见[构建与刷机指南](BUILD-AND-FLASH-GUIDE.md)。
 
 ## 1. 传输与访问
 
@@ -19,7 +18,7 @@
 **错误响应**（全部路由统一）：
 
 ```json
-{"status": <负errno>, "error": "<机器可读码>"}
+{"status": -2, "error": "unknown_route"}
 ```
 
 **HTTP 状态映射**（api.c `reason()` 全集）：
@@ -54,8 +53,9 @@
 | 8 | POST | `/api/v1/update/confirm` | 必须为空 | 手动确认当前槽 + 触发内核 GC |
 | 9 | GET | `/api/v1/mcu/update` | 无 | MCU 固件烧写任务状态 |
 | 10 | GET | `/api/v1/mcu/firmware` | 无 | 当前生效的 MCU 签名固件包记录（active.json） |
-| 11 | POST | `/api/v1/mcu/firmware` | MCU 签名固件包（≤1,049,736 B） | 上传并烧写 MCU 固件 |
-| 12 | POST | `/api/v1/mcu/cancel` | 必须为空 | 请求取消 MCU 烧写 |
+| 11 | POST | `/api/v1/mcu/firmware` | MCU 签名固件包（≤1,049,736 B） | Y4 上传内部签名的 MCU 固件包。Y12 返回 503 `mcu_install_unavailable` |
+| 12 | POST | `/api/v1/mcu/cancel` | 必须为空 | 请求取消当前 MCU 烧写 |
+| 13 | GET | `/api/v1/slot-power` | 无 | Y12 槽位状态及功耗 |
 
 ## 4. GET /api/v1/hardware —— 字段字典
 
@@ -64,7 +64,7 @@
 | 字段 | 类型 | 含义 |
 |---|---|---|
 | `schema` | int | 恒 1 |
-| `device` | string | **设备族，编译期常量**：`"Y4"`（本固件）；Y12 构建翻转 Makefile `DEVICE` 开关即得 `"Y12"`，程序内无运行时推断 |
+| `device` | string | 编译时从所选板型写入 `"Y4"` 或 `"Y12"` |
 | `sampled_ms` | u64 | 采样时刻（守护进程时钟，ms） |
 | `age_ms` | u64 | 快照年龄 = now − sampled_ms |
 | `fresh` | bool | 采样是否新鲜（窗口 5000 ms 内且 magic 正确） |
@@ -89,7 +89,7 @@
 | 字段 | 类型 | 含义 |
 |---|---|---|
 | `status` | int | 0 正常；负 errno（采样失效为 -ESTALE/-11） |
-| `firmware` | string | `"maj.min.patch"`；无固件/不新鲜为 `""`（0.1.38 中 stored 0 是合法主版本，勿当空） |
+| `firmware` | string | `"maj.min.patch"`，无固件或采样过期时为空。主版本 0 有效 |
 | `uid_valid` | bool | MCU UID 是否可信读取 |
 | `uid` | string | 24 hex（12 字节）；产线 UID 流程的身份锚 |
 | `fan_status` | int | 风扇采样错误码（0 正常） |
@@ -119,7 +119,7 @@
 
 | 字段 | 类型 | 含义 |
 |---|---|---|
-| `mode` | string | `legacy`（出厂默认，行为与 0.1.38 完全一致）/ `auto` / `manual`；MCU 不可读时 `unknown` |
+| `mode` | string | `legacy`、`auto` 或 `manual`。MCU 不可读时为 `unknown` |
 | `status` | int | 持久化状态：0 无记录 / 1 写入中 / 2 已提交（或开机读到有效记录）/ 3 上次写入失败（策略在 RAM 生效但**未持久化**） |
 | `stored` | [u8×3] | FAN3/4/5 已存占空比（percent 0-100，MCU flash 永久保存） |
 | `host_online` | bool | 主机心跳是否在线（MCU 口径：10 s 内有心跳且开机后见过至少一次） |
@@ -162,22 +162,29 @@
 
 ## 5. GET /api/v1/version —— 字段字典
 
-轻量版（update.c `y4_board_version_json`），实板样例：
+轻量版由 `update.c` 的 `y4_board_version_json` 提供。以下样例节选展示双槽字段。
 
 ```json
-{"schema":1,"device":"Y4", ...versions 同上...,
- "kernel_running":"6.6.89-cix-build-generic","mcu":"0.1.39",
- "slot":{"selected":"B","boot_ok":true,"boot_count":0,"boot_count_remaining":3,
-   "boot_kernel":null,"boot_kernel_a":"20261112-r189","boot_kernel_b":"20261112-r191",
-   "running":{"partuuid":"0cbed5a4-41bd-5346-861d-35430ee2f4eb","slot":"B"}},
- "consistency":{"kernel_sync":true,"slot_confirmed":true,"manifest_readable":true},
- "slot_error":0}
+{
+  "schema": 1,
+  "device": "Y4",
+  "slot": {
+    "selected": "B",
+    "boot_ok": true,
+    "boot_count": 0,
+    "boot_count_remaining": 3,
+    "boot_kernel_a": "20261101-r1",
+    "boot_kernel_b": "20261101-r2",
+    "running": {"partuuid": "00000000-0000-0000-0000-000000000000", "slot": "B"}
+  },
+  "consistency": {"kernel_sync": true, "slot_confirmed": true, "manifest_readable": true},
+  "slot_error": 0
+}
 ```
-（r191 实板抓取：OTA 后 B 槽运行、A/B 各绑 r189/r191 内核目录）
 
 | 字段 | 含义 |
 |---|---|
-| `device` | 编译期设备族常量（`"Y4"`；Y12 构建为 `"Y12"`） |
+| `device` | 编译时选择的板型 `"Y4"` 或 `"Y12"` |
 | `slot.selected` | grubenv `default` 指向的槽（下次启动） |
 | `slot.boot_ok` | 当前启动是否已健康确认 |
 | `slot.boot_count` | 未确认启动计数 |
@@ -212,7 +219,7 @@ MCU 独立控制 FAN3、FAN4、FAN5，先输出默认 20% PWM，再接通 12 V�
 | `manual` | 三路=已存占空比（`fan3/fan4/fan5`，percent 0-100，0=停转） | **20%**（V11 MCU 0.1.43 起） | 模式+三路占空比存 MCU flash，断电/重启后自动恢复 |
 | `legacy` | 三路固定 20% | 20% | 模式存 MCU flash |
 
-- **出厂/无记录 = legacy**：V11 从 20% 启动。
+- V11 上电时先建立三路 20% PWM，再使能 12 V。
 - 失联判定：MCU 10 s 收不到心跳（`fault_bits` 的 bit4 `FAULT_HOST`），与 `host_online` 字段同口径。
 - 守护进程退出期间由 MCU 维持风扇输出。
 - 手动 `stored` 值 0 = 三路里对应风扇停转；主机失联后回到 20%。
@@ -239,40 +246,35 @@ V11 自 MCU 0.1.43 起只配置 FAN3–FAN5。MCU 先建立 25 kHz、20% PWM，�
 
 ### Y4 GET /api/v1/fans
 
-只读，不碰 MCU 总线（读守护进程最近一次采样）：
+读取守护进程缓存的最近一次采样。以下是只展示 FAN3 的片段。
 
 ```json
-{"schema":1,"device":"Y4","sampled_ms":...,"age_ms":0,"fresh":true,
+{"schema":1,"device":"Y4","sampled_ms":1234,"age_ms":0,"fresh":true,
  "policy":{"mode":"manual","status":2,"stored":[30,50,80],"host_online":true,"error":0},
  "FAN1":{"valid":true,"status":0,"rpm":1234},
- "MCU_fans":[{"connector":"FAN3","valid":true,"monitored":false,"rpm":0,"effective_pwm":30}, ...FAN4/FAN5/FAN6]}
+ "MCU_fans":[{"connector":"FAN3","valid":true,"monitored":false,"rpm":0,"effective_pwm":30}]}
 ```
 
 - `policy`/`FAN1`/`MCU_fans` 字段语义同 §4；`MCU_fans[].effective_pwm` 是 MCU 实测施加值（percent），manual 模式下应≈stored 值。
 - Y4 的 SoC FAN1 由内核驱动自动调速，板载 API 提供测速。
-- r191 实板抓取（auto 模式）：
-
-```json
-{"schema":1,"device":"Y4","sampled_ms":195335,"age_ms":644,"fresh":true,
- "policy":{"mode":"auto","status":2,"stored":[30,50,80],"host_online":true,"error":0},
- "FAN1":{"valid":true,"status":0,"rpm":1699},
- "MCU_fans":[{"connector":"FAN3","valid":true,"monitored":false,"rpm":0,"effective_pwm":100},
-             {"connector":"FAN4","valid":true,"monitored":true,"rpm":9120,"effective_pwm":100},
-             {"connector":"FAN5","valid":true,"monitored":true,"rpm":0,"effective_pwm":100},
-             {"connector":"FAN6","valid":true,"monitored":false,"rpm":0,"effective_pwm":100}]}
-```
-（FAN4/FAN5 effective 恒 100 是本板 FAN5 转速线读 0 触发的堵转全局保护，见 §11；FAN1 1699 rpm 为只读实测）
-
 ## 7. GET /api/v1/temperature —— 温度轻量端点
 
 三路温度的独立小快照（结构与 hardware 的 `temperatures` 完全一致，方便应用单独轮询）：
 
 ```json
-{"schema":1,"device":"Y4","sampled_ms":...,"age_ms":0,"fresh":true,
- "temperatures":{"CPU":{...},"inside":{...},"pcie_switch":{...}}}
+{"schema":1,"device":"Y4","sampled_ms":1234,"age_ms":0,"fresh":true,
+ "temperatures":{
+   "CPU":{"valid":true,"status":0,"millicelsius":46000,"source_age_ms":0},
+   "inside":{"valid":true,"status":0,"millicelsius":29000,"source_age_ms":0},
+   "pcie_switch":{"valid":true,"status":0,"millicelsius":42000,"source_age_ms":0}
+ }}
 ```
 
 来源全部零 exec：CPU=SCMI hwmon（内核）；inside=板载 TMP75（I2C ioctl）；pcie_switch=PCIe 交换芯片（专用采集子进程缓存，带 `source_age_ms`）。
+
+### Y12 槽位功耗
+
+`GET /api/v1/slot-power` 返回 12 个物理槽的 `online`、`present`、`run_led`、`temperature_dc`、`voltage_mv`、`current_ma` 和 `power_mw`。不可用的字段返回 `null`。汇总字段为 `valid_slots`、`complete` 和 `total_mw`。Y4 不提供此路由。[槽号映射](Y4-Y12-DIFFERENCES.md#y12-slot-mapping)
 
 ## 8. OTA 接口
 
@@ -289,7 +291,7 @@ V11 自 MCU 0.1.43 起只配置 FAN3–FAN5。MCU 先建立 25 kHz、20% PWM，�
 | 首启门 | 首启初始化未完成（initialization.completed=false）时 503 |
 | 成功 | `202` + 状态 JSON；之后轮询 `GET /api/v1/update/status` |
 
-包内格式见 `docs/kernel-ota-design.md`；旧布局板收 schema 2 会在 manifest 阶段被拒（不写任何字节）。
+正式发布使用 schema 2。Y12 仅接受对应板型的 schema 2。仍使用旧版单内核布局的设备会在清单校验阶段拒绝 schema 2，需先通过 [Fastboot 完整包](BUILD-AND-FLASH-GUIDE.md#full-fastboot-package)迁移到双槽内核布局。
 
 ### GET /api/v1/update/status —— 字段字典
 
@@ -323,7 +325,7 @@ idle → accepted → open → verifying(验签) → manifest(门禁/旧布局�
      → grubenv(N5/N6 每槽绑定切换) → ready → rebooting(有序重启请求已发)
 ```
 
-失败语义（任意相位失败）：**grubenv 永不改动、目标槽旧内容不再触碰后续流程**，系统照常运行；`/kernels/<版本>.new-*` 暂存残留无害，由下次确认/OTA 清理。
+升级器先写入并校验非活动槽及其内核，之后才更新 grubenv。重启请求发生在 grubenv 写入之后，单独报告失败。重启和首启时通过 `GET /api/v1/version` 核对运行版本与已确认启动槽。
 
 ### POST /api/v1/update/confirm
 
@@ -336,9 +338,11 @@ idle → accepted → open → verifying(验签) → manifest(门禁/旧布局�
 ### GET /api/v1/mcu/firmware —— 当前生效包记录
 
 - 无请求体；200 + `/var/lib/y4-board/active.json` 原文（经 **POST /api/v1/mcu/firmware** 部署的包的收据：`{schema,package,sha256,job,version,uid,sequence}`）
-- 状态目录无记录时返回 `{"schema":1,"active":false}` —— **这不是"MCU 没固件"**：镜像首启初始化刷入内置包（mcu-builtin.json）不写 active.json；**MCU 实际运行版本一律以 hardware 接口的 `mcu.firmware` 为准**（实测：本板首启自动刷 0.1.39 后此端点仍 active:false，mcu.firmware=0.1.39）
+- 状态目录无记录时返回 `{"schema":1,"active":false}`。内置固件不产生主动上传记录，当前运行版本以硬件接口的 `mcu.firmware` 为准。
 
 ### POST /api/v1/mcu/firmware
+
+此写入路由适用于 Y4。Y12 返回 503 `mcu_install_unavailable`。公开构建使用已由内部流程签名的 MCU 包。
 
 | 项 | 值 |
 |---|---|
@@ -372,7 +376,7 @@ idle → accepted → open → verifying(验签) → manifest(门禁/旧布局�
 
 ### POST /api/v1/mcu/cancel
 
-- 空请求体；置 `cancel_requested`，由任务循环收敛；无任务时无效（不报错）
+- 空请求体。有助手任务时标记取消并返回 202。无任务时返回 409 `no_owned_update`。
 
 ## 10. 集成示例（Python，经 SSH 隧道）
 
@@ -391,10 +395,10 @@ def board_post(path, file_path):
     resp = conn.getresponse()
     return resp.status, resp.read().decode()
 
-print(board_post("/api/v1/update", "ota-20261112-rNNN.y4pkg"))  # (202, status json)
+print(board_post("/api/v1/update", os.environ["OTA_PACKAGE"]))
 ```
 
-轮询建议 ≥1 s；rootfs 写入+回读约 5-8 分钟，内核三相位在最后 ~1 秒内原子完成。
+收到 202 后轮询 `GET /api/v1/update/status`。写入和校验耗时取决于包的大小及设备存储速度。
 
 风扇策略（普通 HTTP 小请求，同样走隧道）：
 
@@ -422,7 +426,7 @@ print(board_call("GET", "/api/v1/temperature"))
 - 无应用层鉴权：0600 套接字即边界；非 root 进程连不上（myt_desktop 为 root 服务可直连）
 - OTA 上传期间只读端点不受影响；OTA 暂存占用 `/data`，成功即删、失败保留（下次任务清理）
 - 上传中断（客户端断开）自动丢弃半成品文件，不留垃圾
-- **风扇策略依赖 MCU 0.1.39**（随 r191 固件交付）：MCU 固件未升级时 GET/POST /api/v1/fans 返回 503 `fan_policy_unsupported`，hardware 里 `policy.error=-95`
+- Y4 的 MCU 固件早于 0.1.39 时，风扇策略写入返回 503 `fan_policy_unsupported`，硬件快照的 `policy.error=-95`
 - Y4 POST /api/v1/fans 执行期间（MCU flash 写入 ~1-4 s）MCU 的 I2C 会短暂阻塞：相邻 1-2 个采样周期可能出现 mcu 相关错误码，快照 5 s 窗口内自愈，风扇转速不受影响（硬件 PWM 自主运行）
 - Y4 三路 MCU 风扇策略存 MCU flash，rootfs OTA / 刷机 / 断电都不丢；只有再次 POST 才会改变
 - Y4 的 SoC FAN1 温控独立于板载服务。Y12 的两组机箱风扇可以通过本节所述组接口单独设置。

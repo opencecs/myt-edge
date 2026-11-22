@@ -3,7 +3,7 @@
 This is the boot-only orchestration layer for the reused MCU and Realtek factory
 helpers. It uses Debian Python3, systemd and ordinary private runtime files. It
 does not import OpenCecs PID1/State/ZFS or execute a shell. Fixed native helpers
-are the only child commands. None of these commands was run during development.
+are the only child commands.
 
 Install:
 - boot.py as /usr/libexec/y4-board/y4-board-boot, mode0755.
@@ -48,14 +48,15 @@ Each attempt:
 2. Calls the MCU helper once and waits for its actual exit.
 3. Requires a verified application UID and successful application-mode receipt.
 4. Publishes NIC phase, then a fresh protected 64-byte UID observation.
-5. Calls the NIC helper once with --reconcile --attempt N.
-6. Reads the protected terminal receipt and actual completion marker before
-   deciding whether a subsequent attempt is admissible.
+5. In public builds, calls the NIC helper in read-only inspection mode. A
+   factory build with PG enabled calls `--reconcile --attempt N` and reads the
+   protected terminal receipt and completion marker before retrying.
 
 The UID helper emits the existing Y4UIDS01 little-endian/CRC32C format using
 CLOCK_MONOTONIC. It does not fabricate an SSD/random identity. An earlier UID
-is explicitly revoked before maintenance. The NIC helper continues to read all
-three physical NVM configurations before it decides which writes are needed.
+is explicitly revoked before maintenance. In a PG-enabled build, the NIC
+helper reads all three physical NVM configurations before deciding which writes
+are needed.
 
 The ordinary operation budget is300seconds. Expiry sends one cooperative TERM
 to the owned helper and stops further actions. A timeout is not an exit:
@@ -113,8 +114,3 @@ monitoring uses the same nonblocking mcu.lock as maintenance.
 Both services use KillMode=process and SendSIGKILL=no. Cooperative shutdown
 waits for actual permanent-writer cleanup; this deliberately does not promise
 a forced finite shutdown when a kernel syscall is uninterruptible.
-
-Compilation/syntax status is separate from behavior. This delivery only ran
-Python bytecode compilation and native/CIX/Cortex-M compilation. No factory
-helper, API, unit, fixture, QEMU VM, serial session or physical board was run.
-All runtime and electrical acceptance remains NOT_TESTED.

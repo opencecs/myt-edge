@@ -10,14 +10,13 @@ Build and package Debian 12 for MYT Y4 and Y12. Both boards use the same public 
 
 Both public and maintainer builds use the GitHub `main` branches listed above. Pin the three commits for each build. Keep previous local source trees only for historical reference.
 
-Start with the [dual-board build guide](docs/DUAL-BOARD-BUILD.md). A source checkout also needs the build dependencies and board-specific binaries listed in that guide. Obtain official binaries and their checksums from the maintainer's release channel.
+Start with the [dual-board build guide](docs/DUAL-BOARD-BUILD.md). The public build uses approved signed MCU assets and desktop panel binaries together with the build dependencies listed there. Obtain the binaries and matching checksums from the maintainer.
 
-- Build a system image using the official MCU assets and desktop panel binary.
-- Add the matching official `myt-spi.bin` to generate a full Fastboot ZIP.
-- Generate an OTA from the system image and matching kernel files. Installation requires a signature trusted by the target system.
+- Add the matching official `myt-spi.bin` to generate a standard full Fastboot ZIP.
+- Use the resulting system image and matching kernel files to prepare a system OTA. The device must trust the OTA signature.
 
-On factory-provisioned hardware, the public build can omit the Realtek programmer. The board service checks the installed network devices and their permanent MAC addresses before enabling networking. NIC NVM provisioning is a separate manufacturing operation.
+The public system checks permanent MAC addresses before enabling usable factory-provisioned NICs. Manufacturing handles NIC NVM provisioning separately.
 
 See the [build and flash guide](docs/BUILD-AND-FLASH-GUIDE.md), [board differences](docs/Y4-Y12-DIFFERENCES.md) and [board API](docs/board-api.md).
 
-Authorized maintainers use the same build scripts to compile the private boot firmware, MCU and panel repositories and consume their binary outputs. See the [maintainer build procedure](docs/DUAL-BOARD-BUILD.md#maintainer-build-for-private-components).
+The maintainers compile the boot firmware, MCU and panel from private source repositories. MCU package signing takes place in the internal release environment. The public build verifies and packages the approved binary assets. See the [maintainer build procedure](docs/DUAL-BOARD-BUILD.md#maintainer-build-for-private-components) and [release evidence](RELEASES.md).

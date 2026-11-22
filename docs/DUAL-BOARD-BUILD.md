@@ -22,11 +22,13 @@ Pin the three source revisions as full commits for each build. The assembly comm
 | ARM64 GRUB `BOOTAA64.EFI` | The system disk's EFI system partition. Choose the build that matches the pinned GRUB checksum |
 | Official MCU assets and manifest digest | Board-specific signed MCU payload and existing maintenance program staged into rootfs |
 | Official desktop panel program and manifest | ARM64 panel program staged into rootfs |
-| Official `myt-spi.bin` for the selected board | Optional. Added to a full Fastboot ZIP |
+| Official `myt-spi.bin` for the selected board | Required for a full Fastboot ZIP. It combines DDR, PM and UEFI |
 | Windows Fastboot tools | Windows flashing support in the full package |
-| External OTA signing key | OTA signing. Its corresponding public key must already be trusted on the installation target |
+| External OTA signing key | Separate OTA signing step. The installation target must already trust its public key |
 
-The release operator obtains each board-specific binary through an approved binary channel and checks the digest from the same release metadata. Keep local config files and signing keys outside the Git checkout. The public build omits Realtek PG. The board service checks the NICs and their permanent MAC addresses before enabling networking, so factory NIC provisioning must already be complete.
+Obtain the board-specific binaries and verify them against the hashes provided with the release. Set up the paths for the approved inputs in a local config outside the source tree. Production MCU packages are signed internally. The public build validates the supplied package against the production MCU public key and checks its board, compatibility and manifest hashes before packaging it.
+
+The public build omits Realtek PG and uses read-only NIC inspection. Factory provisioning must already have configured at least one usable port. The network gate releases the valid ports after initialization confirms that no programming operation remains pending.
 
 ## Assemble the source tree
 
@@ -44,7 +46,7 @@ Use `scripts/build.example.json` as the starting point for your local config. Su
 
 ## Build and package
 
-Set `BOARD` to `Y4` or `Y12`, and use the same value for all the binary inputs. Set `VERSION` to the release identifier in `YYYYMMDD-rNN` form.
+Set `BOARD` to `Y4` or `Y12`, and use the same value for all the binary inputs. For a formal release, pass the assigned version explicitly as `VERSION` in `YYYYMMDD-rNN` form. Use that same board and version for both Fastboot and OTA packaging.
 
 ```sh
 python3 scripts/build.py check --config "$LOCAL_CONFIG" --board "$BOARD" \
@@ -58,7 +60,7 @@ python3 scripts/build.py all --config "$LOCAL_CONFIG" --board "$BOARD" \
   --panel-binary "$PANEL_BINARY" --panel-manifest "$PANEL_MANIFEST"
 ```
 
-Append `--spi-bin "$SPI_BIN"` to the second command to produce the full Fastboot ZIP in `$OUTPUT/delivery`. Use the [flash guide](BUILD-AND-FLASH-GUIDE.md) for validation and installation.
+Append `--spi-bin "$SPI_BIN"` to the build command to produce the full Fastboot ZIP in `$OUTPUT/delivery`. With the same build output, run the separate OTA packaging and signing command in the [flash guide](BUILD-AND-FLASH-GUIDE.md). The guide also covers verifying and installing both deliverables.
 
 ## Maintainer build for private components
 
@@ -70,14 +72,4 @@ python3 scripts/build.py all --config "$LOCAL_CONFIG" --board "$BOARD" \
   --component-output "$COMPONENT_OUTPUT" --jobs 16
 ```
 
-The build uses the generated SPI, MCU and panel artifacts. The component receipt records the source commits and output hashes. To build the component inputs separately, use the same configuration and board with `scripts/private_components.py`.
-
-| Configuration entry | Required settings |
-| --- | --- |
-| `uefi` | `repo`, `commit`, `sdk`. Set `toolchain` when the SDK requires an external toolchain |
-| `mcu` | `repo`, `commit`, `maintainer_repo`, `maintainer_commit`, `sysroot`, `crypto_prefix`, and `signing` |
-| `mcu.signing` | `private_key`, `public_key`, `sequence`, `host_version`. Set `host_min` and `host_max` to specify a compatible host version range |
-| `panel` | `repo`, `commit`, `version` |
-| `tool_paths` | Optional array of local tool directories to add to `PATH` |
-
-Keep this configuration, private source locations and signing keys in your authorized build environment. After verification, publish approved binaries and their pinned hashes through your release channel.
+The internal release configuration supplies the pinned private sources and the MCU signing environment. The build uses the generated SPI, signed MCU assets and panel binary. The component receipt records the source commits and output hashes. Keep internal configuration and private signing keys in the authorized build environment. Share approved binary artifacts and checksum manifests through the release channel. The system OTA uses a separate signing step after the system build.

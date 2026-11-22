@@ -16,9 +16,10 @@ The old y4-mcud service must not run concurrently.
 Monitoring reuses master e890813f2a production I2C transport, UID coherence,
 TMP75 PM transaction, SCMI/hwmon reads, staged token/CRC cooling, fan snapshots,
 MCU health/backend decoders, physical PCIe slot inventory and disk activity.
-Temperature failure invalidates fan reduction; FAN1 stays with the Linux
-driver and the MCU controls FAN3–FAN6. The production default installed fan
-mask remains FAN4/FAN5. The PCIe sampler imports only the read-only
+On Y4, the Linux driver controls FAN1 and the MCU controls FAN3–FAN5. The
+API retains the FAN6 field for protocol compatibility. On Y12, the SoC runs
+the two fan groups and the board service reports fan and slot power telemetry.
+The PCIe sampler imports the read-only
 inventory/topology/BAR/temperature path, with no slot power/reset controller.
 Its cached observations expire after 15 seconds. Physical network and logical
 LAN/Bond address display observations expire after 3 seconds. Per-field error
@@ -51,10 +52,10 @@ its own authenticated administrator permission.
 | GET | /api/v1/hardware | Cached telemetry, per-field validity and boot initialization receipt. No hardware work is triggered. |
 | GET | /api/v1/mcu/update | Latest job, actual helper phase/error and measured write/readback counters. |
 | GET | /api/v1/mcu/firmware | Successfully published active package metadata, or active:false. |
-| POST | /api/v1/mcu/firmware | Raw signed package, exact Content-Length, maximum1049736bytes. Returns202 only after durable upload and an owned helper were established. |
+| POST | /api/v1/mcu/firmware | On Y4, accept an internally signed MCU package with exact Content-Length, up to 1,049,736 bytes. Return 202 after durable upload and launch of the owned helper. On Y12, return 503 `mcu_install_unavailable`. |
 | POST | /api/v1/mcu/cancel | One cooperative SIGTERM to the owned helper.202 is a cancellation request, not proof of exit. |
 
-Example administrator requests (documentation only; not run during development):
+Example administrator requests on Y4
 
     curl --unix-socket /run/y4-board/api.sock http://localhost/api/v1/hardware
     curl --unix-socket /run/y4-board/api.sock \
@@ -119,7 +120,3 @@ only compiles. For CIX ARM64 use the approved sysroot with both architecture
 and generic system include directories, and the pinned Debian12 libcrypto
 headers/library. Runtime depends on Debian libssl3; no private library path is
 baked into the executable.
-
-This delivery was compiled for native x86_64 and CIX ARM64. No binary, API,
-hardware operation, protocol fixture, sanitizer, unit test, QEMU guest or board
-test was executed. Runtime behavior remains NOT_TESTED.

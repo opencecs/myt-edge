@@ -13,7 +13,7 @@ them. See [RFC 9542](https://www.rfc-editor.org/rfc/rfc9542.html) and the
 
 Check all legacy-derived addresses in a fleet inventory before approving a
 production batch. Provide all previous and new MCU UIDs from both models,
-one 24-digit hexadecimal UID per line, in production order. Run from tools:
+one 24-digit hexadecimal UID per line, in production order. Run from the `myt-edge` repository root.
 
 ```sh
 make -C board/factory/nic OUT=/tmp/myt-nic-audit audit-macs
