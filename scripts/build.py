@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build selected Y4 UEFI, current MCU/CIX kernel and Debian 12."""
+"""Build and package Debian 12 for MYT Edge Y4 or Y12."""
 import argparse
 import datetime
 import hashlib

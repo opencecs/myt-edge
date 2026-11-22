@@ -111,7 +111,7 @@ def full_readme(version, board='Y4', *, bundle=False, layout_versions=None):
     elif bundle:
         spi_step = f'''本包包含首版合并格式的 {board} 板级固件，构建记录未确认接收端支持版本 2 的板载 NOR 表头。
    如需更新 SPI，请使用本板型同时支持表头版本 1 和 2 的新版 SPI 交付，按其说明操作。
-   本包的 images/uefi.bin 和 images/myt-spi.bin 均含旧接收端，写入会重新安装该版本。
+   本包的 images/myt-spi.bin 含旧接收端，写入会重新安装该版本。
    如仅重装系统，可保留设备上的 SPI 固件，继续第 3 步。'''
     return f'''MYT {board} / {project} 完整刷机包 {version}
 
@@ -145,8 +145,10 @@ def ota_readme(version, board='Y4'):
    curl --fail-with-body --unix-socket /run/y4-board/api.sock -X POST -H 'Content-Type: application/octet-stream' -H 'Expect:' --upload-file /data/{name} http://localhost/api/v1/update
 3. 收到 202 后等待自动写入、校验和重启，期间保持供电。
 
-旧版升级器提示：尚未修复的 r205 及更早版本发起首次升级时仍使用旧的重启逻辑。\n首次升级也需要正常停止服务时，应由维护人员先安装已修复的 y4-boardd，或使用完整刷机包。\n请按对应系统版本的发布说明核对升级条件。\n\n只升级系统及其配套内核；DDR、CSU PM 配置和 UEFI（BL33）使用同板型完整刷机包 README.txt 中的 Fastboot 流程。
-系统拒绝同版本重装和降级。详细变更和验收记录见对应版本的发布说明。
+本包须匹配设备板型，版本须高于当前系统，且签名须由目标设备信任。
+设备会将系统和配套内核写入非活动槽。重启后核对运行版本和已确认的启动槽。
+板级 DDR、CSU PM 和 UEFI 通过同板型全量包中的合并 SPI BIN 单独更新。
+详细变更和验收记录见对应版本的发布说明。
 '''
 
 
