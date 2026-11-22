@@ -16,7 +16,7 @@ Pin the three source revisions as full commits for each build. The assembly comm
 
 | Input | Where it is used |
 | --- | --- |
-| Kernel source and configuration, or a matching kernel bundle | The kernel `Image`, selected device tree and modules in the system image and OTA |
+| Qualified Linux 6.6.89 kernel bundle for the selected board | The kernel `Image`, device tree and modules in the system image and OTA |
 | Rootfs source checkout | Debian package versions, overlay files, CIX runtime binaries and QtScrcpy |
 | Build dependencies and ARM64 sysroot | Host-side compilation of the board service and system staging |
 | ARM64 GRUB `BOOTAA64.EFI` | The system disk's EFI system partition. Choose the build that matches the pinned GRUB checksum |

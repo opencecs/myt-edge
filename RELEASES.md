@@ -1,6 +1,6 @@
 # Release evidence
 
-Use the same explicit `YYYYMMDD-rNN` version for the full Fastboot and system OTA packages for a given board. Verify and approve the exact artifacts before publication.
+Use the same explicit `YYYYMMDD-rNN` version for the full Fastboot and system OTA packages for a given board. Publish only approved release artifacts after verifying the exact packages. Keep test packages in the validation environment.
 
 | Record | Required information |
 | --- | --- |
