@@ -115,16 +115,21 @@ def verify_signed_mcu(build, report):
     image_name = f"mcu/{board.lower()}-mcu.bin"
     image = artifact(build, report, image_name, image_name)
     prebuilt = report.get("mcu_build", {}).get("mode") == "prebuilt"
-    if board == "Y4":
-        header = source_file("mcu/include/protocol.h", report).decode("utf8")
-    elif prebuilt:
-        header = source_file("mcu/include/y12_power_wire.h", report).decode("utf8")
+    if prebuilt:
+        # The signed envelope supplies the firmware version for an approved
+        # binary. Public protocol headers can remain stable across releases.
+        expected = signed.get("version")
     else:
-        header_path = "mcu-source/include/y12_power_wire.h"
-        header = artifact(build, report, header_path, header_path).decode("utf8")
-    expected = ".".join(re.search(rf"^#define {board}_FW_{name} ([0-9]+)$", header, re.M).group(1)
-                        for name in ("MAJOR", "MINOR", "PATCH"))
-    if (board == "Y4" and version(expected) < (0, 1, 34)) or report.get("mcu_version") != expected or signed.get("version") != expected:
+        if board == "Y4":
+            header = source_file("mcu/include/protocol.h", report).decode("utf8")
+        else:
+            header_path = "mcu-source/include/y12_power_wire.h"
+            header = artifact(build, report, header_path, header_path).decode("utf8")
+        expected = ".".join(re.search(rf"^#define {board}_FW_{name} ([0-9]+)$", header, re.M).group(1)
+                            for name in ("MAJOR", "MINOR", "PATCH"))
+    parsed_version = version(expected)
+    if ((board == "Y4" and parsed_version < (0, 1, 34))
+            or report.get("mcu_version") != expected or signed.get("version") != expected):
         raise ValueError("MCU protocol and signed firmware version cohort mismatch")
     package_path = relative_file(build, "mcu/mcu-package.bin")
     key_path = relative_file(build, "mcu/mcu-public-key.bin")
@@ -137,6 +142,8 @@ def verify_signed_mcu(build, report):
     host_version = version(host)
     if len(key) != 32 or key in (bytes(32), bytes([255]) * 32):
         raise ValueError("nonblank raw32-byte MCU trust public key required")
+    if prebuilt and key != read_regular(BOARD / "trust/y4-mcu-production.pub", 32):
+        raise ValueError("prebuilt MCU firmware must use the production trust key")
     if len(package) < 72 + 64 + 64:
         raise ValueError("truncated MCU signed envelope")
     magic, fmt, header_size, kind, manifest_size, signature_size, flags, image_size, reserved, image_hash = struct.unpack_from("<8sHHIIHHQQ32s", package)
