@@ -29,6 +29,6 @@ Both boards provide a 2.5GbE LAN port and two 10GbE optical ports. See the [plat
 | [cix-kernel](https://github.com/opencecs/cix-kernel) | Linux kernel, Y4 and Y12 device trees, and kernel configuration |
 | [cix-rootfs](https://github.com/opencecs/cix-rootfs) | Debian package inputs, desktop configuration, root filesystem overlays and vendor runtime files |
 
-Both public and maintainer builds pin commits from the same three GitHub repositories. Public builds use approved signed MCU packages and panel binaries from the release maintainer. Supply the matching official `myt-spi.bin` for a full Fastboot package. Prepare a system OTA separately with a signing key that the target device trusts.
+Both public and maintainer builds pin commits from the same three GitHub repositories. Download the board-specific SPI firmware, signed MCU assets and management panel from [MYT Edge Releases](https://github.com/opencecs/myt-edge/releases). The [build guide](docs/DUAL-BOARD-BUILD.md#download-validated-components-for-your-board) shows how to verify and use them in a full Fastboot build. Prepare a system OTA separately with a signing key that the target device trusts.
 
 On the public image, the board service checks permanent MAC addresses before allowing usable factory-provisioned NICs onto the network. Manufacturing handles NIC NVM provisioning separately. Boot firmware, MCU software and the panel are compiled by the maintainers, who sign MCU packages in their internal release environment.
