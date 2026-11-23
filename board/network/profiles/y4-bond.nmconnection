@@ -20,8 +20,12 @@ ad_select=bandwidth
 xmit_hash_policy=layer3+4
 all_slaves_active=0
 
+[ethernet]
+cloned-mac-address=stable
+
 [ipv4]
 method=auto
+dhcp-client-id=mac
 may-fail=true
 route-table=1010
 route-metric=100
