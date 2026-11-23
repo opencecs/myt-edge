@@ -15,7 +15,14 @@ mount -t proc -o nosuid,nodev,noexec proc "$root/proc"
 mount -t tmpfs -o mode=0555,nosuid,nodev,noexec tmpfs "$root/sys"
 mount -o remount,ro "$root/sys"
 mount -t tmpfs -o nosuid,nodev tmpfs "$root/run"
-install -m 0644 /etc/resolv.conf "$root/etc/resolv.conf"
+resolver="$root/etc/resolv.conf"
+if [ "$(readlink "$resolver")" = ../run/systemd/resolve/stub-resolv.conf ]; then
+    # apt scripts need the builder's DNS, even though the guest's resolver
+    # cannot start in a chroot. This copy disappears with the private /run.
+    mkdir -p "$root/run/systemd/resolve"
+    resolver="$root/run/systemd/resolve/stub-resolv.conf"
+fi
+install -m 0644 /etc/resolv.conf "$resolver"
 printf '#!/bin/sh\nexit 101\n' >"$root/usr/sbin/policy-rc.d"
 chmod 0755 "$root/usr/sbin/policy-rc.d"
 exec "$@"

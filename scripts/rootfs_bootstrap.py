@@ -207,6 +207,12 @@ def main():
         mirror = lock['sources']['debian'][0].split()[0]
         run('debootstrap','--arch='+lock['architecture'],'--variant=minbase','--merged-usr',
             '--force-check-gpg','--keyring='+str(keyring),lock['suite'],root,mirror)
+    if 'systemd-resolved' in lock['common_packages']:
+        # Set the delivered link before Debian's postinst can back up the
+        # builder's DNS. Its temporary target exists only in the mount namespace.
+        resolver = root / 'etc/resolv.conf'
+        resolver.unlink(missing_ok=True)
+        resolver.symlink_to('../run/systemd/resolve/stub-resolv.conf')
     run('unshare','--mount','--propagation','private','bash',HERE/'rootfs_bootstrap_chroot.sh',root,
         sys.executable,'-B',Path(__file__).resolve(),root,recipe,cache,'--install-stage')
     (root/'usr/sbin/policy-rc.d').unlink(missing_ok=True)

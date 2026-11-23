@@ -16,6 +16,7 @@ import sys
 import tempfile
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 from frozen_packages import prepare_frozen_packages
 
@@ -265,6 +266,25 @@ def install_manifest_packages(root, manifest):
     return packages
 
 
+@contextmanager
+def _temporary_resolver(root):
+    """Use the builder's DNS for apt while preserving the guest resolver."""
+    path = _target(root, "etc") / "resolv.conf"
+    with tempfile.TemporaryDirectory(prefix=".myt-resolver-", dir=path.parent) as temp:
+        previous = Path(temp) / "previous"
+        if os.path.lexists(path):
+            path.rename(previous)
+        try:
+            build_config = Path(temp) / "resolv.conf"
+            shutil.copy2("/etc/resolv.conf", build_config)
+            path.symlink_to(build_config.relative_to(path.parent))
+            yield
+        finally:
+            path.unlink(missing_ok=True)
+            if os.path.lexists(previous):
+                previous.rename(path)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True, type=Path)
@@ -284,29 +304,29 @@ def main():
         packages = [arg for arg in packages if arg.split("=", 1)[0] not in frozen]
 
     shutil.copy2(QEMU, root / "usr/bin/qemu-aarch64-static")
-    shutil.copy2("/etc/resolv.conf", root / "etc/resolv.conf")
     mounts = []
     env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
     prefix = ["chroot", str(root), "/usr/bin/qemu-aarch64-static"]
     try:
-        for name in BINDS:
-            target = root / name
-            run(["mount", "--bind", f"/{name}", str(target)])
-            mounts.append(target)
-        run(prefix + ["/usr/bin/apt-get", "update"], env=env)
-        run(prefix + ["/usr/bin/apt-get", "-y",
-                      "-o", "Dpkg::Options::=--force-confdef",
-                      "-o", "Dpkg::Options::=--force-confold", "upgrade"], env=env)
-        if packages:
-            run(prefix + ["/usr/bin/apt-get", "-y", "--allow-downgrades", "install", *packages], env=env)
-        if frozen:
-            # Reinstall even if upgrade selected the same version: consume the
-            # exact validated DEB bytes, not another repository's equal version.
-            run(prefix + ["/usr/bin/apt-get", "-y", "--allow-downgrades",
-                          "--reinstall", "install", *frozen.values()], env=env)
-        audit = run(prefix + ["/usr/bin/dpkg", "--audit"], capture_output=True, text=True)
-        if audit.stdout.strip():
-            raise ValueError("staged dpkg audit failed: " + audit.stdout.strip())
+        with _temporary_resolver(root):
+            for name in BINDS:
+                target = root / name
+                run(["mount", "--bind", f"/{name}", str(target)])
+                mounts.append(target)
+            run(prefix + ["/usr/bin/apt-get", "update"], env=env)
+            run(prefix + ["/usr/bin/apt-get", "-y",
+                          "-o", "Dpkg::Options::=--force-confdef",
+                          "-o", "Dpkg::Options::=--force-confold", "upgrade"], env=env)
+            if packages:
+                run(prefix + ["/usr/bin/apt-get", "-y", "--allow-downgrades", "install", *packages], env=env)
+            if frozen:
+                # Reinstall even if upgrade selected the same version: consume the
+                # exact validated DEB bytes, not another repository's equal version.
+                run(prefix + ["/usr/bin/apt-get", "-y", "--allow-downgrades",
+                              "--reinstall", "install", *frozen.values()], env=env)
+            audit = run(prefix + ["/usr/bin/dpkg", "--audit"], capture_output=True, text=True)
+            if audit.stdout.strip():
+                raise ValueError("staged dpkg audit failed: " + audit.stdout.strip())
     finally:
         for target in reversed(mounts):
             subprocess.run(["umount", str(target)], check=False)

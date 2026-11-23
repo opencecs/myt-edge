@@ -352,6 +352,25 @@ class AptCommandTests(unittest.TestCase):
                 native.assert_not_called()
             self.assertEqual(sources.read_text(), "original sources\n")
 
+    def test_temporary_resolver_preserves_guest_link_on_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            outer = Path(temp)
+            root = outer / "root"
+            etc = root / "etc"
+            etc.mkdir(parents=True)
+            target = outer / "outside"
+            target.write_text("unchanged")
+            guest = etc / "resolv.conf"
+            guest.symlink_to(target)
+            with self.assertRaisesRegex(RuntimeError, "failed apt"):
+                with apt._temporary_resolver(root):
+                    self.assertEqual(guest.read_bytes(), Path("/etc/resolv.conf").read_bytes())
+                    self.assertTrue(guest.resolve().is_relative_to(etc))
+                    raise RuntimeError("failed apt")
+            self.assertEqual(guest.readlink(), target)
+            self.assertEqual(target.read_text(), "unchanged")
+            self.assertEqual(list(etc.iterdir()), [guest])
+
     def test_host_root_refused_before_copy(self):
         with patch.object(apt.sys, "argv", ["apt_upgrade.py", "--root", "/"]), \
                 patch.object(apt.shutil, "copy2") as copy:

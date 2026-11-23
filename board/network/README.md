@@ -83,16 +83,19 @@ and priorities11010/11025 are reserved while the policy service is enabled.
 
 ## DNS and boot coordination
 
-The frozen base has a stale regular resolv.conf pointing at a loopback stub,
-but neither systemd-resolved nor resolvconf is installed. The NM configuration
-retains NetworkManager's standard automatic resolver-backend selection, which
-consumes DHCP DNS and maintains that regular file itself when no provider is
-installed. Existing administrator systemd-resolved/resolvconf owners and
-resolver symlinks remain under their standard manager. Neither board daemon
-writes resolv.conf. No fixed upstream server or additional DNS daemon is
-introduced. The adapter imposes no DNS priority on either logical interface; their
-DHCP servers enter the standard resolver selection under NetworkManager and
-administrator or VPN DNS ordering is preserved.
+The Y4/Y12 image uses systemd-resolved for the local DNS listener at
+`127.0.0.53`. NetworkManager supplies upstream DNS through its resolved
+plugin using the same DHCP, static profile and VPN configuration. The
+rootfs points `/etc/resolv.conf` at the resolver's runtime stub file. During
+image construction the builder's resolver is available in the chroot's
+private `/run` and is discarded at the end of the build.
+
+Docker starts after the local listener is initialized, without waiting for a
+lease. Host-network containers copy the same stub address at start and can
+resolve when DHCP DNS arrives or changes. User-defined bridges still use
+Docker's own DNS, and per-container DNS overrides still apply. Docker's
+legacy default bridge reads the separate upstream file maintained by
+systemd-resolved, so it retains Docker's normal upstream snapshot behavior.
 
 NetworkManager, systemd-networkd and ifupdown startup require
 `y4-network-ready.service` on both boards. It starts the board initializer and
