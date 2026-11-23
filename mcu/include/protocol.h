@@ -14,7 +14,7 @@ enum { COOL_IDLE=0, COOL_PENDING=1, COOL_COMMITTED=2, COOL_REJECTED=3, COOL_EXPI
 #define Y4_BOARD 4
 #define Y4_FW_MAJOR 0
 #define Y4_FW_MINOR 1
-#define Y4_FW_PATCH 46
+#define Y4_FW_PATCH 47
 /* Y4 V11 duty percent, not RPM or a cross-product thermal policy. UI fans
  * 1/2/3 map to protocol FAN3/4/5; preserve reserved FAN6 wire fields.
  * Y12 firmware/host protocols require their own verified adapter. */
