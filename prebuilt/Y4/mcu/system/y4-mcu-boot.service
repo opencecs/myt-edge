@@ -1,0 +1,10 @@
+[Unit]
+Description=Y4 MCU application pin preparation
+Before=y4-mcud.service
+ConditionPathExists=/dev/i2c-1
+ConditionPathExists=/sys/bus/pci/devices/0004:c2:00.0
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/y4-mcu/reset --prepare
+RemainAfterExit=yes
+TimeoutStartSec=15

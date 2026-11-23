@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Build and package Debian 12 for MYT Edge Y4 or Y12."""
 import argparse
+from contextlib import ExitStack
 import datetime
+import gzip
 import hashlib
 import importlib.util
 import json
@@ -12,6 +14,7 @@ import stat
 import subprocess
 import threading
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -369,6 +372,7 @@ class Builder:
             if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_BUNDLE_SIZE:
                 raise ValueError("Expected one regular, board-specific SPI BIN")
             read_spi_bundle(path.read_bytes(), self.board_label)
+            self.report["inputs"]["spi_bin"] = item(path)
         required = ["board/build.py"]
         if self.board_label == "Y12":
             required.append("mcu/include/y12_power_wire.h")
@@ -2007,10 +2011,56 @@ class Builder:
         self.record()
 
 
+def use_bundled_components(args, board, scratch):
+    """Use approved inputs from the same Git commit as the build sources."""
+    commit = subprocess.check_output(
+        ["git", "rev-parse", "--verify", args.ref + "^{commit}"], cwd=ROOT, text=True,
+    ).strip()
+    present = subprocess.run(["git", "cat-file", "-e", commit + ":prebuilt"], cwd=ROOT,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if present.returncode:
+        return  # Older source pins may still use externally supplied assets.
+    args.ref = commit
+    with tempfile.TemporaryFile() as archive:
+        subprocess.run(["git", "archive", commit, "prebuilt/manifest.json",
+                        "prebuilt/panel.json", "prebuilt/myt_desktop.gz", "prebuilt/" + board],
+                       cwd=ROOT, stdout=archive, check=True)
+        archive.seek(0)
+        subprocess.run(["tar", "-xf", "-", "-C", scratch], stdin=archive, check=True)
+
+    bundle = scratch / "prebuilt"
+    index = json.loads((bundle / "manifest.json").read_text())
+    if type(index.get("schema")) is not int or index["schema"] != 1:
+        raise ValueError("Unsupported bundled build input manifest")
+    selected = index["boards"][board]
+    args.mcu_assets = bundle / board / "mcu"
+    args.mcu_manifest_sha256 = selected["mcu_manifest_sha256"]
+    spec = importlib.util.spec_from_file_location("mcu_assets", ROOT / "board/mcu_assets.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.load_assets(args.mcu_assets, board, args.mcu_manifest_sha256)
+
+    if not args.system_only and args.component in ("all", "check"):
+        args.spi_bin = bundle / board / "myt-spi.bin"
+        if sha(args.spi_bin) != selected["spi_sha256"]:
+            raise ValueError(f"{board} bundled SPI SHA256 mismatch")
+
+    args.panel_manifest = bundle / "panel.json"
+    compressed = bundle / "myt_desktop.gz"
+    if (sha(args.panel_manifest) != index["panel"]["manifest_sha256"]
+            or sha(compressed) != index["panel"]["gzip_sha256"]):
+        raise ValueError("Bundled panel checksum mismatch")
+    args.panel_binary = bundle / "myt_desktop"
+    with gzip.open(compressed, "rb") as source, args.panel_binary.open("xb") as output:
+        shutil.copyfileobj(source, output)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("component", nargs="?", default="all", type=str.lower, choices=["all", "check", "board", "components"])
-    parser.add_argument("--spi-bin", type=Path, help="Official board SPI BIN for a full Fastboot ZIP")
+    spi = parser.add_mutually_exclusive_group()
+    spi.add_argument("--spi-bin", type=Path, help="Override the board SPI BIN for a full Fastboot ZIP")
+    spi.add_argument("--system-only", action="store_true", help="Build without a Fastboot SPI payload")
     parser.add_argument("--mcu-assets", type=Path)
     parser.add_argument("--mcu-manifest-sha256")
     parser.add_argument("--panel-binary", type=Path)
@@ -2061,7 +2111,8 @@ def main():
             config = json.loads(args.config.read_text())
         except FileNotFoundError:
             parser.error(f"Build configuration does not exist: {args.config}")
-    selected = resolve_board(board_config(config, args.board), args.board)
+    resolved_config = board_config(config, args.board)
+    selected = resolve_board(resolved_config, args.board)
     label = selected[0]
     if args.plan:
         print(json.dumps({
@@ -2090,11 +2141,21 @@ def main():
         raise SystemExit(subprocess.run(command).returncode)
     if args.component == "components" and args.repackage_from:
         parser.error("components does not accept --repackage-from")
+    publish_to = None
+    explicit = (args.spi_bin, args.mcu_assets, args.mcu_manifest_sha256,
+                args.panel_binary, args.panel_manifest)
     if args.private_components:
         if args.component == "check" or not args.component_output:
             parser.error("Private component builds require all/components and --component-output")
-        if any((args.spi_bin, args.mcu_assets, args.mcu_manifest_sha256, args.panel_binary, args.panel_manifest)):
+        if any(explicit):
             parser.error("Choose private builds or explicit component inputs")
+        if args.component == "all" and not args.system_only:
+            private_config = json.loads(args.private_components.read_text())
+            destination = private_config.get("publish_prebuilt_to")
+            if destination is not None:
+                if not isinstance(destination, str) or not destination:
+                    parser.error("publish_prebuilt_to must name a local myt-edge checkout")
+                publish_to = (args.private_components.resolve().parent / destination).resolve(strict=True)
         subprocess.run([sys.executable, str(ROOT / "scripts/private_components.py"),
                         "--board", label, "--config", str(args.private_components.resolve()),
                         "--output", str(args.component_output.resolve()), "--jobs", str(args.jobs)], check=True)
@@ -2102,16 +2163,42 @@ def main():
         args.mcu_manifest_sha256 = sha(args.mcu_assets / "manifest.json")
         args.panel_binary = args.component_output / "myt_desktop"
         args.panel_manifest = args.component_output / "panel.json"
-        if args.component == "all":
+        if args.component == "all" and not args.system_only:
             args.spi_bin = args.component_output / "myt-spi.bin"
     elif args.component_output:
         parser.error("--component-output requires --private-components")
+
+    with ExitStack() as stack:
+        manual = resolved_config.get("inputs", {})
+        if (not args.private_components and not any(explicit)
+                and not ({"mcu_assets", "mcu_vendor", "panel_binary"} & manual.keys())
+                and not (args.repackage_from or args.reuse_components)):
+            scratch = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="myt-prebuilt-")))
+            use_bundled_components(args, label, scratch)
+        run_build(args, publish_to)
+
+
+def run_build(args, publish_to):
     builder = Builder(args)
     if args.component == "check":
         print(json.dumps(builder.preflight(), indent=2))
         return
     try:
         builder.build()
+        if publish_to is not None:
+            from publish_prebuilt import publish
+            verification = builder.out / "RELEASE-VERIFICATION.json"
+            builder.run("verify-release-before-publish",
+                        [sys.executable, ROOT / "scripts/verify_release.py", "--build",
+                         builder.out, "--report", verification])
+            result = json.loads(verification.read_text())
+            if not (result["offline_complete"] and result["full_zip_payloads_verified"]):
+                raise ValueError("Prebuilt inputs require a verified full Fastboot package")
+            print("publish-prebuilt", flush=True)
+            revision = publish(publish_to, args.component_output, builder.board_label,
+                               builder.delivery_version)
+            builder.report["published_prebuilt_commit"] = revision
+            builder.record()
     except Exception as exc:
         if getattr(builder, "started", False):
             builder.report["failure"] = str(exc)

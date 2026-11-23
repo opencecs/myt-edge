@@ -2,3 +2,8 @@
 *.y4pkg filter=lfs diff=lfs merge=lfs -text
 inputs/dependencies/*.tar.zst filter=lfs diff=lfs merge=lfs -text
 inputs/kernel-pg-reference/*.tar.zst filter=lfs diff=lfs merge=lfs -text
+
+# Approved build inputs are checked byte for byte on every platform.
+prebuilt/** -text
+prebuilt/**/firmware/build/*.hex binary
+prebuilt/**/licenses/* -whitespace

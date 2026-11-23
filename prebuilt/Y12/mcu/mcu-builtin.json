@@ -1,0 +1,17 @@
+{
+  "board": "Y12",
+  "flashed": false,
+  "host_max": "0.1.0",
+  "host_min": "0.1.0",
+  "image_bytes": 6076,
+  "image_sha256": "a99ae77bfcbf5c52176c231d655aa225b91a97b93af227fb0fe61656fbe03570",
+  "object": "MCU",
+  "package_bytes": 6420,
+  "package_sha256": "58e15edf7cbfc6f0f659510f37890f677b486bfb444a1c5d1ca9e6c3f9746a6c",
+  "protocol": 2,
+  "schema": 1,
+  "sequence": 1001,
+  "sha256": "58e15edf7cbfc6f0f659510f37890f677b486bfb444a1c5d1ca9e6c3f9746a6c",
+  "signed": true,
+  "version": "0.1.4"
+}

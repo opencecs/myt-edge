@@ -1,0 +1,42 @@
+{
+  "board": "Y12",
+  "files": {
+    "firmware/build/y12-mcu.bin": {
+      "bytes": 6076,
+      "sha256": "a99ae77bfcbf5c52176c231d655aa225b91a97b93af227fb0fe61656fbe03570"
+    },
+    "host-version": {
+      "bytes": 6,
+      "sha256": "e9dd8507f4bf0c6f42458e41aea833ad0bd3f6127272335eee9bf4d58541ed67"
+    },
+    "host/y4-mcu-maintain": {
+      "bytes": 299760,
+      "sha256": "76e4dbcf550f3439ba879cd5f29c6efcbc9b20217d59a35415d576add64c5a70"
+    },
+    "licenses/Apache-2.0.txt": {
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    "licenses/GD32_Firmware_Library_LICENSE": {
+      "bytes": 29664,
+      "sha256": "6795dc1bcd1dc5e0d03c23a57a40fafce63439d1c77fc460484670aaa7a67a63"
+    },
+    "licenses/LICENSE-Droid.txt": {
+      "bytes": 1250,
+      "sha256": "f44dda1cd553ac22e7020b016dcce8a521b56de0995dc63c9eff746d9121f64f"
+    },
+    "mcu-builtin.json": {
+      "bytes": 500,
+      "sha256": "78e5509f5e9906d1d020471d1ab555f7914f86c1f201b32e4d71fd4356a73f5d"
+    },
+    "mcu-package.bin": {
+      "bytes": 6420,
+      "sha256": "58e15edf7cbfc6f0f659510f37890f677b486bfb444a1c5d1ca9e6c3f9746a6c"
+    },
+    "mcu-public-key.bin": {
+      "bytes": 32,
+      "sha256": "7d3d0b208299c411805c46b2a7c4a5c9937641553abad6ed1794c511c7f86e74"
+    }
+  },
+  "schema": 1
+}

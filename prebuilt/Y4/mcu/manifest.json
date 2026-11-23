@@ -1,0 +1,74 @@
+{
+  "board": "Y4",
+  "files": {
+    "firmware/build/y4-mcu.bin": {
+      "bytes": 152112,
+      "sha256": "8683eee66a4fe0d168a7d1fd5d5eb40f518e8ab79c0a1251918894a009153af9"
+    },
+    "firmware/build/y4-mcu.hex": {
+      "bytes": 427762,
+      "sha256": "d2f85ad8ddf21a95c3b27056128f6e4000f851a9ec5d8b7c67c94cbf6ffd414a"
+    },
+    "host-version": {
+      "bytes": 6,
+      "sha256": "e9dd8507f4bf0c6f42458e41aea833ad0bd3f6127272335eee9bf4d58541ed67"
+    },
+    "host/hexverify": {
+      "bytes": 70944,
+      "sha256": "29f0b3e54e7f5819c6c0cd0dcaf4eb147b458cf6bd4a0ff0e2cd8f780ab109a4"
+    },
+    "host/mcuctl": {
+      "bytes": 71224,
+      "sha256": "bf217996805b9f68122d2b58848fb4203b166564bcfc18cfc8bd6bb02aa95d15"
+    },
+    "host/mcud": {
+      "bytes": 75744,
+      "sha256": "4f0e97636f8087c6477e18ede84da1c9ddaeedee2eb2c89521edf1f42f590b54"
+    },
+    "host/y4-mcu-flash": {
+      "bytes": 73912,
+      "sha256": "12936b40608e966feb7b5ee4061039ac0bbcbf07b54c8ee84cbc9a089ff1a3af"
+    },
+    "host/y4-mcu-maintain": {
+      "bytes": 298464,
+      "sha256": "da213a3cb82e8775735bcc6102f206c809d40702dcfd64ae8c289ce17c8643b4"
+    },
+    "host/y4-mcu-reset": {
+      "bytes": 71648,
+      "sha256": "44dac9a5c1a93374aaa82730318ea7cc12822b9aba11014aa22a1f816de18912"
+    },
+    "licenses/Apache-2.0.txt": {
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    "licenses/GD32_Firmware_Library_LICENSE": {
+      "bytes": 29664,
+      "sha256": "6795dc1bcd1dc5e0d03c23a57a40fafce63439d1c77fc460484670aaa7a67a63"
+    },
+    "licenses/LICENSE-Droid.txt": {
+      "bytes": 1250,
+      "sha256": "f44dda1cd553ac22e7020b016dcce8a521b56de0995dc63c9eff746d9121f64f"
+    },
+    "mcu-builtin.json": {
+      "bytes": 487,
+      "sha256": "2e14a34cda6fc35e1d78008bf4f44c1f1121ca8cbabae49e656c5aad355bf56f"
+    },
+    "mcu-package.bin": {
+      "bytes": 152458,
+      "sha256": "bbf3932b48c029a2bf20c393b58b737f452e223ab8ec7c97686056082809a491"
+    },
+    "mcu-public-key.bin": {
+      "bytes": 32,
+      "sha256": "7d3d0b208299c411805c46b2a7c4a5c9937641553abad6ed1794c511c7f86e74"
+    },
+    "system/y4-mcu-boot.service": {
+      "bytes": 276,
+      "sha256": "baaa4a531751e23755738e7156a28c6c9c18c8333ead0711a1d06287513bdeaa"
+    },
+    "system/y4-mcud.service": {
+      "bytes": 701,
+      "sha256": "6a490d54d216dc26e3909aa5bef4069844cceb889bee1de22fe3441bd05828a3"
+    }
+  },
+  "schema": 1
+}

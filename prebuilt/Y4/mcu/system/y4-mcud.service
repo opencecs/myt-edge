@@ -1,0 +1,29 @@
+[Unit]
+Description=Y4 MCU system service
+After=local-fs.target y4-mcu-boot.service
+Wants=y4-mcu-boot.service
+Conflicts=mcu-daemon-y4.service mcu-daemon.service mcu-flash.service
+ConditionPathExists=/dev/i2c-1
+ConditionPathExists=/sys/bus/pci/devices/0004:c2:00.0
+
+[Service]
+Type=notify
+ExecStart=/usr/local/sbin/y4-mcud
+Restart=on-failure
+RestartSec=5
+WatchdogSec=20
+TimeoutStopSec=15
+RuntimeDirectory=y4-mcu
+RuntimeDirectoryMode=0750
+UMask=0077
+MemoryMax=16M
+TasksMax=16
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/run/y4-mcu /etc/y4-mcu /sys/class/gpio /sys/devices
+RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

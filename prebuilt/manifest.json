@@ -1,0 +1,17 @@
+{
+  "boards": {
+    "Y12": {
+      "mcu_manifest_sha256": "bcfa3661c66a7085154168d98887eb61e16ece6614d4d8618bb3b76f708496ec",
+      "spi_sha256": "d311fff1f5b04e7b168127977e52b9337f1318b6449a869fd767ab1decba4a5d"
+    },
+    "Y4": {
+      "mcu_manifest_sha256": "274f783fdfdfecdbf2e56b4c775321ce621a2a52befb2f49c43407f051007a6a",
+      "spi_sha256": "b5776315361753efe770c10700adaf37d9e798c7d4e794afd30118d73738fdcc"
+    }
+  },
+  "panel": {
+    "gzip_sha256": "88e120cf78eb0ac84de2a83323ce45e062f66e5acc80f7c5b39cb2322b9ac5c8",
+    "manifest_sha256": "ae3ca0b6a6acfec1f12538264ed1fe8f76d64dff7a3f8f1fa2c2c6a533de1884"
+  },
+  "schema": 1
+}

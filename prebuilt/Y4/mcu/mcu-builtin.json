@@ -1,0 +1,16 @@
+{
+  "flashed": false,
+  "host_max": "0.1.0",
+  "host_min": "0.1.0",
+  "image_bytes": 152112,
+  "image_sha256": "8683eee66a4fe0d168a7d1fd5d5eb40f518e8ab79c0a1251918894a009153af9",
+  "object": "MCU",
+  "package_bytes": 152458,
+  "package_sha256": "bbf3932b48c029a2bf20c393b58b737f452e223ab8ec7c97686056082809a491",
+  "protocol": 2,
+  "schema": 1,
+  "sequence": 1003,
+  "sha256": "bbf3932b48c029a2bf20c393b58b737f452e223ab8ec7c97686056082809a491",
+  "signed": true,
+  "version": "0.1.47"
+}
