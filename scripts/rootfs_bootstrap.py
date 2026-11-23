@@ -81,6 +81,21 @@ def configure_desktop(root):
     write('etc/systemd/logind.conf.d/60-myt-power-key.conf','[Login]\nHandlePowerKey=ignore\n')
 
 
+
+def configure_ifupdown_resolver(root):
+    # The Debian 12 ifupdown hooks are executed by run-parts. Bash, which
+    # this image uses as /bin/sh, rejects return outside a function.
+    for action in ('up', 'down'):
+        hook = root / f'etc/network/if-{action}.d/resolved'
+        content = hook.read_text()
+        guards, separator, body = content.partition('    mystatedir=/run/network\n')
+        fixed = guards.replace('        return\n', '        exit 0\n')
+        if fixed != guards:
+            if not separator:
+                raise ValueError(f'unexpected Debian resolver hook: {hook}')
+            hook.write_text(fixed + separator + body)
+
+
 def install_packages(root, lock, cache, apt_sources):
     env = dict(os.environ, LC_ALL='C', DEBIAN_FRONTEND='noninteractive', SYSTEMD_OFFLINE='1', RUNLEVEL='1', INITRD='No')
 
@@ -139,6 +154,8 @@ def install_packages(root, lock, cache, apt_sources):
     guest('apt-get','check')
     guest('debconf-communicate','gdm3',input='SET shared/default-x-display-manager gdm3\nFSET shared/default-x-display-manager seen true\n',text=True)
     configure_desktop(root)
+    if {'ifupdown', 'systemd-resolved'} <= files.keys():
+        configure_ifupdown_resolver(root)
     locales = {'en_US.UTF-8 UTF-8','es_ES.UTF-8 UTF-8','nb_NO.UTF-8 UTF-8','pl_PL.UTF-8 UTF-8','zh_CN.UTF-8 UTF-8'}
     p = root/'etc/locale.gen'
     lines = [line.lstrip('# ').strip() if line.lstrip('# ').strip() in locales else line for line in p.read_text().splitlines()]
