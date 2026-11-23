@@ -586,9 +586,19 @@ static int inspect_ports(void) {
   int pg_status=!pg_loaded&&errno!=ENOENT?-errno:0;
   if(pg_loaded&&!summary)summary=-EBUSY;
   if(pg_status&&!summary)summary=pg_status;
+  uint8_t bond[6];
+  char bond_mac[20] = "null";
+  const unsigned optical = (1u << OC_NIC_SFP1) | (1u << OC_NIC_SFP2);
+  if ((usable & optical) == optical &&
+      !oc_nic_factory_bond_mac(macs[OC_NIC_SFP1], macs[OC_NIC_SFP2], bond) &&
+      (!(usable & (1u << OC_NIC_LAN)) || memcmp(bond, macs[OC_NIC_LAN], 6)))
+    (void)snprintf(bond_mac, sizeof bond_mac,
+                   "\"%02x:%02x:%02x:%02x:%02x:%02x\"",
+                   bond[0], bond[1], bond[2], bond[3], bond[4], bond[5]);
   printf("{\"schema\":1,\"status\":%d,\"driver_mask\":%u,\"usable_mask\":%u,"
-         "\"pgdrv_loaded\":%s,\"pgdrv_status\":%d,\"port_status\":[%d,%d,%d]}\n",
-         summary,driver_mask,usable,pg_loaded?"true":"false",pg_status,errors[0],errors[1],errors[2]);
+         "\"pgdrv_loaded\":%s,\"pgdrv_status\":%d,\"port_status\":[%d,%d,%d],\"bond_mac\":%s}\n",
+         summary,driver_mask,usable,pg_loaded?"true":"false",pg_status,
+         errors[0],errors[1],errors[2],bond_mac);
   return 0;
 }
 

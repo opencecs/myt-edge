@@ -20,11 +20,12 @@ make -C board/factory/nic OUT=/tmp/myt-nic-audit audit-macs
 /tmp/myt-nic-audit/audit-macs < /path/to/fleet-uids.txt
 ```
 
-The checker uses the factory C derivation. It rejects invalid UIDs and any
-duplicate across devices or roles within the supplied inventory. It does not
-read or write either board. For a global uniqueness guarantee on new units,
-manufacturing must allocate all three addresses from an IEEE-assigned block
-under a persistent, shared uniqueness constraint. Preserve shipped
-assignments, and reserve the three addresses atomically before writing and
-verifying NIC NVM. Without an IEEE allocation, a centrally reserved local
-range only guarantees uniqueness within the managed deployment scope.
+The checker uses the same C derivation as the runtime. It checks all four
+addresses for each UID, including the `bond10g` MAC derived from the permanent
+SFP pair. It detects duplicates across devices and roles in the supplied
+inventory, including a bond address overlapping another device's physical
+port. It performs the check offline. Preserve shipped assignments. A future
+globally unique allocation needs reservations for all four roles from an
+IEEE-assigned block under a persistent, shared uniqueness constraint.
+Centrally reserved local ranges provide uniqueness within the managed
+deployment scope.

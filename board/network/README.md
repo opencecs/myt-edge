@@ -23,13 +23,16 @@ A duplicate exact IP on both logical interfaces is reported as EADDRINUSE
 and the adapter withholds its generated main-table defaults. This is not
 a guarantee about loops caused by unrelated external switch wiring.
 
-NetworkManager assigns bond10g a stable, per-installation MAC using the
-connection stable ID and the local host key. It restores that address when the
-bond reactivates after its ports are detached. DHCPv4 sends the bond MAC as
-its Ethernet client ID. The standalone LAN and each port's permanent factory
-MAC keep their own identities. Applying this profile can acquire a new lease
-once, and a DHCP reservation can keep the selected management address. A
-freshly initialized system slot can generate a different host key.
+The boot-time NIC inspection reads both optical ports' permanent MACs
+independently of carrier. For the consecutive locally administered factory
+pair, `bond10g` uses the SFP1 address with the first octet XORed with `0x80`.
+The initializer publishes that explicit address in a runtime NetworkManager
+profile before releasing the network. DHCPv4 uses it as the Ethernet client
+ID. The identity stays tied to the same NICs across rootfs replacements and
+slot changes. A missing or incompatible NIC pair uses the stable keyfile
+setting, and initialization releases independently valid ports. This uses the
+existing inspection, with no carrier wait or additional helper. The factory
+inventory check covers address conflicts across devices and roles.
 
 ## Adaptive 10G operation
 

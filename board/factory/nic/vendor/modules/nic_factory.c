@@ -39,6 +39,28 @@ int oc_nic_factory_mac(const uint8_t uid[12], uint8_t mac[3][6]) {
   }
   return 0;
 }
+/* Factory optical MACs occupy two consecutive positions in the local
+ * unicast address space. Flip the highest payload bit to keep a reversible
+ * mapping and preserve the Ethernet address flags. */
+int oc_nic_factory_bond_mac(const uint8_t sfp1[6], const uint8_t sfp2[6],
+                            uint8_t bond[6]) {
+  if (!sfp1 || !sfp2 || !bond)
+    return -EINVAL;
+  if ((sfp1[0] & 3u) != 2u || (sfp2[0] & 3u) != 2u)
+    return -EBADMSG;
+  uint64_t first = sfp1[0] >> 2;
+  uint64_t second = sfp2[0] >> 2;
+  for (unsigned i = 1; i < 6u; i++) {
+    first = (first << 8) | sfp1[i];
+    second = (second << 8) | sfp2[i];
+  }
+  if (!first || first + 1u != second)
+    return -EBADMSG;
+  memmove(bond, sfp1, 6);
+  bond[0] ^= 0x80u;
+  return 0;
+}
+
 int oc_nic_factory_plan(unsigned role, const struct oc_nic_nvm *n,
                         const uint8_t desired[6], struct oc_nic_plan *p) {
   if (role >= 3u || !n || !desired || !p)

@@ -31,6 +31,8 @@ struct oc_nic_factory_ops {
   int (*cancelled)(void *);
 };
 int oc_nic_factory_mac(const uint8_t[12], uint8_t[3][6]);
+int oc_nic_factory_bond_mac(const uint8_t sfp1[6], const uint8_t sfp2[6],
+                            uint8_t bond[6]);
 int oc_nic_factory_parse(const char *, struct oc_nic_nvm *);
 int oc_nic_factory_plan(unsigned, const struct oc_nic_nvm *, const uint8_t[6],
                         struct oc_nic_plan *);

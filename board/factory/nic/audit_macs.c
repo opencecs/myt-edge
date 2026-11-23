@@ -39,7 +39,8 @@ static int by_mac(const void *a, const void *b) {
 }
 
 int main(void) {
-  static const char *const ports[] = {"lan", "sfp1", "sfp2"};
+  enum { BOND_PORT = OC_NIC_PORTS, ADDRESS_COUNT = OC_NIC_PORTS + 1 };
+  static const char *const ports[ADDRESS_COUNT] = {"lan", "sfp1", "sfp2", "bond10g"};
   char *text = NULL;
   size_t text_size = 0, line = 0, count = 0, capacity = 0;
   struct mac_entry *entries = NULL;
@@ -47,7 +48,7 @@ int main(void) {
   ssize_t len;
 
   while ((len = getline(&text, &text_size, stdin)) >= 0) {
-    uint8_t uid[12], mac[3][6];
+    uint8_t uid[12], mac[ADDRESS_COUNT][6];
     line++;
     while (len > 0 && (text[len - 1] == '\n' || text[len - 1] == '\r'))
       len--;
@@ -55,10 +56,14 @@ int main(void) {
       fprintf(stderr, "Invalid MCU UID on line %zu\n", line);
       goto done;
     }
-    if (capacity - count < 3) {
+    if (oc_nic_factory_bond_mac(mac[OC_NIC_SFP1], mac[OC_NIC_SFP2], mac[BOND_PORT])) {
+      fprintf(stderr, "Cannot derive bond10g MAC on line %zu\n", line);
+      goto done;
+    }
+    if (capacity - count < ADDRESS_COUNT) {
       if (capacity > SIZE_MAX / sizeof *entries / 2)
         goto done;
-      size_t next = capacity ? capacity * 2 : 192;
+      size_t next = capacity ? capacity * 2 : ADDRESS_COUNT * 64u;
       struct mac_entry *grown = realloc(entries, next * sizeof *entries);
       if (!grown) {
         perror("allocate addresses");
@@ -67,7 +72,7 @@ int main(void) {
       entries = grown;
       capacity = next;
     }
-    for (unsigned port = 0; port < 3; port++) {
+    for (unsigned port = 0; port < ADDRESS_COUNT; port++) {
       memcpy(entries[count].mac, mac[port], sizeof mac[port]);
       entries[count].line = line;
       entries[count].port = port;
@@ -90,7 +95,7 @@ int main(void) {
   }
   if (!status)
     printf("Verified %zu addresses from %zu MCU UIDs in this inventory\n",
-           count, count / 3);
+           count, count / ADDRESS_COUNT);
 done:
   free(entries);
   free(text);

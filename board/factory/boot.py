@@ -23,6 +23,7 @@ HELPER = "/usr/libexec/y4-board/y4-board-boot-helper"
 MCU = "/usr/libexec/y4-board/y4-mcu-maintain"
 NIC = "/usr/libexec/y4-board/y4-nic-factory"
 HOST = Path("/etc/y4-board/host-version")
+BOND_PROFILE = Path("/etc/NetworkManager/system-connections/y4-bond.nmconnection")
 LIMIT = 5
 BUDGET_SECONDS = 300.0
 stopping = False
@@ -524,6 +525,38 @@ class Initializer:
         self.state.update(report)
         return report["observed_usable_mask"]
 
+    def bond_profile(self, parent, usable):
+        directory = parent / "system-connections"
+        mac = self.state.get("observed_bond_mac")
+        if usable & 6 == 6 and mac is not None:
+            try:
+                profile = read_data(BOND_PROFILE, 65536)
+            except FileNotFoundError:
+                profile = b""
+            marker = b"\n[ethernet]\ncloned-mac-address=stable\n"
+            if (profile.count(marker) == 1
+                    and b"\nuuid=948fe2c1-4018-4acf-b25b-ecedb97c1000\n" in profile
+                    and b"\ninterface-name=bond10g\n" in profile):
+                directory.mkdir(mode=0o755, exist_ok=True)
+                # An explicit profile setting also restores the MAC when the
+                # kernel resets it after detaching the last member.
+                updated = marker.replace(b"=stable", b"=" + mac.encode("ascii"))
+                atomic(directory / BOND_PROFILE.name, profile.replace(marker, updated, 1))
+                return mac
+        # Keep the shipped stable profile for an incomplete or custom NIC cohort.
+        try:
+            fd = trusted_dir(directory)
+        except FileNotFoundError:
+            return None
+        try:
+            try:
+                os.unlink(BOND_PROFILE.name, dir_fd=fd)
+            except FileNotFoundError:
+                pass
+        finally:
+            os.close(fd)
+        return None
+
     def result_config(self, usable):
         parent = Path("/run/NetworkManager")
         for directory in (parent, parent / "conf.d"):
@@ -540,6 +573,12 @@ class Initializer:
             if not usable & (1 << i):
                 text += ("\n[device-y4-board-result-%s]\nmatch-device=interface-name:%s\nmanaged=0\n" % (name, name))
         atomic(parent / "conf.d/31-y4-board-result.conf", text.encode(), 0o644)
+        self.state["bond_mac"] = None
+        try:
+            self.state["bond_mac"] = self.bond_profile(parent, usable)
+        except (BootError, OSError) as error:
+            # Stock stable identity and usable physical ports stay available.
+            self.state["bond_profile_error"] = str(error)
 
     def finish(self, code, unknown=False):
         if unknown or not self.ownership_known:
@@ -552,6 +591,9 @@ class Initializer:
                 usable = self.inspect()
             except (BootError, OSError, ValueError) as error:
                 self.state["inspection_error"] = str(error)
+        if code == 0 and self.state.get("nic_mode") == "inspect-only" and not usable:
+            code = -errno.ENODEV
+            self.counter["history"][-1]["status"] = code
         while not lock_free(RUN / "mcu.lock") or not lock_free(RUN / "nic.lock"):
             self.publish("writer_lock_pending", -errno.EINPROGRESS)
             time.sleep(0.1)
@@ -682,7 +724,8 @@ class Initializer:
                     raise BootError(-errno.EBADMSG, "nic", "board package metadata mismatch")
                 if package_info.get("pg_module") == "omitted-read-only":
                     self.state["nic_mode"] = "inspect-only"
-                    result = 0 if self.inspect() else -errno.ENODEV
+                    # finish collects the settled NIC snapshot and result.
+                    result = 0
                 else:
                     nic_code, nic_child = self.call("nic", [NIC, "--reconcile", "--attempt", str(self.counter["attempts"])], 300.0)
                     raw_summary = last_json(Path(nic_child["log"]), {"status", "restore_status", "verified_mask", "partial_unknown"})
@@ -818,7 +861,13 @@ def nic_inspection(result):
         raise ValueError("inspection mask")
     if type(result.get("pgdrv_loaded")) is not bool:
         raise ValueError("PG module observation")
+    mac = result.get("bond_mac")
+    if (usable & 6 != 6 or not isinstance(mac, str)
+            or not re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac)
+            or int(mac[:2], 16) & 3 != 2):
+        mac = None
     return {
+        "observed_bond_mac": mac,
         "inspection_status": integer(result.get("status"), -4095, 0),
         "pgdrv_loaded": result["pgdrv_loaded"],
         "pgdrv_status": integer(result.get("pgdrv_status"), -4095, 0),
