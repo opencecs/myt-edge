@@ -2,7 +2,7 @@
 
 | Repository | Scope |
 | --- | --- |
-| [myt-edge](https://github.com/opencecs/myt-edge) | Build orchestration, board services, image and OTA packaging, Fastboot host tools |
+| [myt-edge](https://github.com/opencecs/myt-edge) | Build orchestration, board services, image and OTA packaging, Fastboot host tools and [approved prebuilt components](../prebuilt/) |
 | [cix-kernel](https://github.com/opencecs/cix-kernel) | Linux drivers, ARM64 kernel configuration and device trees for supported boards |
 | [cix-rootfs](https://github.com/opencecs/cix-rootfs) | Debian package inputs, system and desktop overlays and supported vendor runtime files |
 

@@ -11,7 +11,7 @@ Use the [platform overview](PLATFORM-OVERVIEW.md) to choose the target hardware 
 | Device tree, PCIe, a driver or ARM64 kernel configuration | [cix-kernel](https://github.com/opencecs/cix-kernel) |
 | Debian packages, system or desktop configuration, vendor runtime integration | [cix-rootfs](https://github.com/opencecs/cix-rootfs) |
 | Board assembly, input checks, image layout or package format | [Build scripts](../scripts/) and [host flash scripts](../scripts/flash/) |
-| UEFI, MCU firmware or the management panel implementation | Maintainer source repositories. The public build consumes the approved binary inputs listed in the [build guide](DUAL-BOARD-BUILD.md#obtain-the-inputs). |
+| UEFI, MCU firmware or the management panel implementation | Maintainer source repositories. The public build consumes the approved binaries in [`prebuilt/`](../prebuilt/). See the [maintainer workflow](DUAL-BOARD-BUILD.md#maintainer-build-for-private-components) for compiling and syncing those inputs. |
 
 Read the [board differences](Y4-Y12-DIFFERENCES.md) before changing hardware behavior. Preserve the existing board API field meanings, units and error semantics when making compatible changes. Update the API reference and examples with any intentional interface change. For changes to signed MCU assets or the host interface, coordinate supported board, firmware version and host version with the maintainer. Relevant wire definitions are in [mcu/include](../mcu/include/).
 
@@ -26,7 +26,7 @@ Read the [board differences](Y4-Y12-DIFFERENCES.md) before changing hardware beh
    ```
 
    The plan prints the selection without validating inputs. Use [build preflight](DUAL-BOARD-BUILD.md#build-a-public-system) for the actual input checks.
-3. Assemble and build with matching kernel, MCU assets and SPI inputs for the selected physical board. Review the generated `SOURCES.json` and save it with the results. Use separate output directories for Y4 and Y12.
+3. Assemble and build with the kernel bundle for the selected physical board. The bundled MCU and SPI inputs follow the board selection. Review the generated `SOURCES.json` and save it with the results. Use separate output directories for Y4 and Y12.
 
 ## Test the affected paths
 

@@ -9,4 +9,4 @@ Use the same explicit `YYYYMMDD-rNN` version for the full Fastboot and system OT
 | Deliverables | `<BOARD>-<VERSION>-full.zip` and `<BOARD>-<VERSION>-ota.zip`, with SHA256 checksums |
 | Validation | Build, package and device checks performed on this board and version, with results for the delivered artifacts |
 
-Public builds consume MCU packages signed by the internal release process. System OTA signing is a separate step and must use a key trusted by the target. See the [build and flash guide](docs/BUILD-AND-FLASH-GUIDE.md) for package validation and installation.
+Public builds use the boot firmware, internally signed MCU packages and shared panel pinned in [`prebuilt/`](prebuilt/) at the selected `myt-edge` commit. The [maintainer sync](docs/DUAL-BOARD-BUILD.md#refresh-the-public-build-inputs) updates component binaries after offline verification of an internal full build. Record hardware acceptance separately when releasing a system. System OTA signing must use a key trusted by the target. See the [build and flash guide](docs/BUILD-AND-FLASH-GUIDE.md) for package validation and installation.
