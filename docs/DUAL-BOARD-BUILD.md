@@ -100,7 +100,7 @@ This builds the SPI BIN, signs the MCU package and produces the panel binary bef
 
 ### Refresh the public build inputs
 
-Set the top-level `publish_prebuilt_to` key in the protected `PRIVATE_CONFIG` to the path of the canonical `myt-edge` source checkout. Use an absolute path, or a path relative to the directory containing `PRIVATE_CONFIG`. That checkout needs a clean `main` and an authorized GitHub push connection. With this setting, an internal full build with `all --private-components` verifies its completed package before updating the selected board's SPI and signed MCU assets and the shared panel in `prebuilt/`. The update uses a normal fast-forward push to `main`. Later public builds select the updated files using the new commit.
+Set the top-level `publish_prebuilt_to` key in the protected `PRIVATE_CONFIG` to the path of the canonical `myt-edge` source checkout. Use an absolute path, or a path relative to the directory containing `PRIVATE_CONFIG`. That checkout needs the public GitHub repository as `origin` and permission to push its `main` branch. With this setting, an internal full build with `all --private-components` verifies its completed package before updating the selected board's SPI and signed MCU assets and the shared panel in `prebuilt/`. The update uses a normal fast-forward push to `main`. Later public builds select the updated files using the new commit.
 
 If publication fails, the command exits with an error. The generated ZIP and verification report are available in `$OUTPUT` for inspection. This sync publishes the approved build inputs and their hashes. The internal signing environment handles signing and the full Fastboot and system OTA archives follow the separate release process.
 
