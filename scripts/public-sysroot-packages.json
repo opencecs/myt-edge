@@ -1,0 +1,224 @@
+{
+  "architecture": "arm64",
+  "packages": {
+    "libblkid-dev": {
+      "arch": "arm64",
+      "bytes": 183024,
+      "sha256": "9592d23dfd89a2665c804610c1f6c78b0f1ba0cae9a709137892c7112788609f",
+      "url": "https://deb.debian.org/debian/pool/main/u/util-linux/libblkid-dev_2.38.1-5+deb12u3_arm64.deb",
+      "version": "2.38.1-5+deb12u3"
+    },
+    "libblkid1": {
+      "arch": "arm64",
+      "bytes": 142728,
+      "sha256": "6c462ce69d08f1ddaa9a77bbdad4af8e289267095599eb8e92a9ab3ea21cdc41",
+      "url": "https://deb.debian.org/debian/pool/main/u/util-linux/libblkid1_2.38.1-5+deb12u3_arm64.deb",
+      "version": "2.38.1-5+deb12u3"
+    },
+    "libc6": {
+      "arch": "arm64",
+      "bytes": 2324660,
+      "sha256": "01f4330719fd4f65580e16ea5a0527f372fca750e8f588d26deaf09f2d3b1cf4",
+      "url": "https://deb.debian.org/debian/pool/main/g/glibc/libc6_2.36-9+deb12u14_arm64.deb",
+      "version": "2.36-9+deb12u14"
+    },
+    "libc6-dev": {
+      "arch": "arm64",
+      "bytes": 1435692,
+      "sha256": "8bc395bf2ee9939f1a6ae395f974cffdcf541d98f99adfe89ce7e4bef36d159e",
+      "url": "https://deb.debian.org/debian/pool/main/g/glibc/libc6-dev_2.36-9+deb12u14_arm64.deb",
+      "version": "2.36-9+deb12u14"
+    },
+    "libcrypt-dev": {
+      "arch": "arm64",
+      "bytes": 120532,
+      "sha256": "8f40a050f6d54b47b0972f77ea29932573e0e6b4521b833c9d825f46a9db8b75",
+      "url": "https://deb.debian.org/debian/pool/main/libx/libxcrypt/libcrypt-dev_4.4.33-2_arm64.deb",
+      "version": "1:4.4.33-2"
+    },
+    "libcrypt1": {
+      "arch": "arm64",
+      "bytes": 90044,
+      "sha256": "eea0ad76ea5eb507127fea0c291622ea4ecdbb71c4b9a8ed9c76ae33fc1a0127",
+      "url": "https://deb.debian.org/debian/pool/main/libx/libxcrypt/libcrypt1_4.4.33-2_arm64.deb",
+      "version": "1:4.4.33-2"
+    },
+    "libffi-dev": {
+      "arch": "arm64",
+      "bytes": 55984,
+      "sha256": "8ff6335f76752ef8659762435d0d88129ef0090a587520853238809bd10ef392",
+      "url": "https://deb.debian.org/debian/pool/main/libf/libffi/libffi-dev_3.4.4-1_arm64.deb",
+      "version": "3.4.4-1"
+    },
+    "libffi8": {
+      "arch": "arm64",
+      "bytes": 20492,
+      "sha256": "80b5c36177dc0e29d531c7eddbed3cc7355cb490e49f8cfa5959572d161f27b3",
+      "url": "https://deb.debian.org/debian/pool/main/libf/libffi/libffi8_3.4.4-1_arm64.deb",
+      "version": "3.4.4-1"
+    },
+    "libgcc-s1": {
+      "arch": "arm64",
+      "bytes": 34816,
+      "sha256": "576926b283613db80168ddf76380a3bd877602778cf0d226caa7bfbfa71eacf3",
+      "url": "https://deb.debian.org/debian/pool/main/g/gcc-12/libgcc-s1_12.2.0-14+deb12u1_arm64.deb",
+      "version": "12.2.0-14+deb12u1"
+    },
+    "libglib2.0-0": {
+      "arch": "arm64",
+      "bytes": 1315904,
+      "sha256": "61d92fffada7e27fc0ed9d23e047b45bca3b2e3bfe1a918f4ec16559282859f4",
+      "url": "https://deb.debian.org/debian/pool/main/g/glib2.0/libglib2.0-0_2.74.6-2+deb12u9_arm64.deb",
+      "version": "2.74.6-2+deb12u9"
+    },
+    "libglib2.0-dev": {
+      "arch": "arm64",
+      "bytes": 1622968,
+      "sha256": "ebe19a7908a412653e3cbd5bc9a9b78732d8b75408ced87799ff39ab9c76ce11",
+      "url": "https://deb.debian.org/debian/pool/main/g/glib2.0/libglib2.0-dev_2.74.6-2+deb12u9_arm64.deb",
+      "version": "2.74.6-2+deb12u9"
+    },
+    "libmount-dev": {
+      "arch": "arm64",
+      "bytes": 22560,
+      "sha256": "6a798953ab746eaaf87d048e20651ebb0dd61f0fe62c119c00225807812c543c",
+      "url": "https://deb.debian.org/debian/pool/main/u/util-linux/libmount-dev_2.38.1-5+deb12u3_arm64.deb",
+      "version": "2.38.1-5+deb12u3"
+    },
+    "libmount1": {
+      "arch": "arm64",
+      "bytes": 159936,
+      "sha256": "b48877c1e60c2589d9e17f72d782cd2ab8a3fdaeda54f05920bcb26c9404b1e8",
+      "url": "https://deb.debian.org/debian/pool/main/u/util-linux/libmount1_2.38.1-5+deb12u3_arm64.deb",
+      "version": "2.38.1-5+deb12u3"
+    },
+    "libnsl-dev": {
+      "arch": "arm64",
+      "bytes": 66132,
+      "sha256": "baf8a2ef1e9faec26dd84e62d0e8b653f54d2211a7a89c1b67965aee8a3da790",
+      "url": "https://deb.debian.org/debian/pool/main/libn/libnsl/libnsl-dev_1.3.0-2_arm64.deb",
+      "version": "1.3.0-2"
+    },
+    "libnsl2": {
+      "arch": "arm64",
+      "bytes": 36908,
+      "sha256": "8f9ba58b219779b43c4ccc78c79b0a23f721fc96323c202abb31e02f942104b3",
+      "url": "https://deb.debian.org/debian/pool/main/libn/libnsl/libnsl2_1.3.0-2_arm64.deb",
+      "version": "1.3.0-2"
+    },
+    "libpcre2-16-0": {
+      "arch": "arm64",
+      "bytes": 216404,
+      "sha256": "062da740176de14b90a18c6c4cc31d7684884518565065db2ba2398a49e57b65",
+      "url": "https://deb.debian.org/debian-security/pool/updates/main/p/pcre2/libpcre2-16-0_10.42-1+deb12u2_arm64.deb",
+      "version": "10.42-1+deb12u2"
+    },
+    "libpcre2-8-0": {
+      "arch": "arm64",
+      "bytes": 230704,
+      "sha256": "8498d2c0bd6747dfc2fc6eec62774a86967079555f7043d5a7b78ee4efbbc0fb",
+      "url": "https://deb.debian.org/debian-security/pool/updates/main/p/pcre2/libpcre2-8-0_10.42-1+deb12u2_arm64.deb",
+      "version": "10.42-1+deb12u2"
+    },
+    "libpcre2-dev": {
+      "arch": "arm64",
+      "bytes": 664148,
+      "sha256": "d7087f8bf0e833f99285567eaabb596cf49a355516026500580bf5a2e7353285",
+      "url": "https://deb.debian.org/debian-security/pool/updates/main/p/pcre2/libpcre2-dev_10.42-1+deb12u2_arm64.deb",
+      "version": "10.42-1+deb12u2"
+    },
+    "libselinux1": {
+      "arch": "arm64",
+      "bytes": 68800,
+      "sha256": "29201edf23ebae40844d6c289afdb9bba52f927d55096ed1b1cd37e040135edc",
+      "url": "https://deb.debian.org/debian/pool/main/libs/libselinux/libselinux1_3.4-1+b6_arm64.deb",
+      "version": "3.4-1+b6"
+    },
+    "libselinux1-dev": {
+      "arch": "arm64",
+      "bytes": 159328,
+      "sha256": "73e5601da895d51e6647eb402349f1970277a4dfccde118c302daaf9a1ee2a03",
+      "url": "https://deb.debian.org/debian/pool/main/libs/libselinux/libselinux1-dev_3.4-1+b6_arm64.deb",
+      "version": "3.4-1+b6"
+    },
+    "libsepol-dev": {
+      "arch": "arm64",
+      "bytes": 332464,
+      "sha256": "ce478644322c7dc445cdba3d4117a2546765a0154725cbf8c2ff1acfa302de2a",
+      "url": "https://deb.debian.org/debian/pool/main/libs/libsepol/libsepol-dev_3.4-2.1_arm64.deb",
+      "version": "3.4-2.1"
+    },
+    "libsepol2": {
+      "arch": "arm64",
+      "bytes": 246968,
+      "sha256": "22b0041a04af364f643ff2e7ff88eaaecdf0714dcfd253e8c99a6a952ae1fec6",
+      "url": "https://deb.debian.org/debian/pool/main/libs/libsepol/libsepol2_3.4-2.1_arm64.deb",
+      "version": "3.4-2.1"
+    },
+    "libssl-dev": {
+      "arch": "arm64",
+      "bytes": 2321828,
+      "sha256": "d141686eacc7e271630bf9032cd19cebe984b6864e59c02ac85554ff62941d00",
+      "url": "https://deb.debian.org/debian-security/pool/updates/main/o/openssl/libssl-dev_3.0.22-1~deb12u2_arm64.deb",
+      "version": "3.0.22-1~deb12u2"
+    },
+    "libssl3": {
+      "arch": "arm64",
+      "bytes": 1829128,
+      "sha256": "3d04ecd8d0f57fed50d205abaeedfcc84c1960073ea085719c00add44b0ccd7f",
+      "url": "https://deb.debian.org/debian-security/pool/updates/main/o/openssl/libssl3_3.0.22-1~deb12u2_arm64.deb",
+      "version": "3.0.22-1~deb12u2"
+    },
+    "libtirpc-dev": {
+      "arch": "arm64",
+      "bytes": 193960,
+      "sha256": "bec1ab917db9f30e08e209281ce5f073a2d4f7ac43aabb658780fccaa822341a",
+      "url": "https://deb.debian.org/debian/pool/main/libt/libtirpc/libtirpc-dev_1.3.3+ds-1_arm64.deb",
+      "version": "1.3.3+ds-1"
+    },
+    "libtirpc3": {
+      "arch": "arm64",
+      "bytes": 80940,
+      "sha256": "deaf9ea54f74cab6690b4bc0b427f05cbe62cc073580d84f5f18a8d9e2ece401",
+      "url": "https://deb.debian.org/debian/pool/main/libt/libtirpc/libtirpc3_1.3.3+ds-1_arm64.deb",
+      "version": "1.3.3+ds-1"
+    },
+    "libzstd-dev": {
+      "arch": "arm64",
+      "bytes": 316912,
+      "sha256": "3e734e9e8ff0fca4c213bf6e3367541e63e6ea847d30e0a3dfe229c7c101acb1",
+      "url": "https://deb.debian.org/debian/pool/main/libz/libzstd/libzstd-dev_1.5.4+dfsg2-5_arm64.deb",
+      "version": "1.5.4+dfsg2-5"
+    },
+    "libzstd1": {
+      "arch": "arm64",
+      "bytes": 250548,
+      "sha256": "95e173c9538f96ede4fc275ec7863f395a97dd0ea62454be9bc914efa1b9be93",
+      "url": "https://deb.debian.org/debian/pool/main/libz/libzstd/libzstd1_1.5.4+dfsg2-5_arm64.deb",
+      "version": "1.5.4+dfsg2-5"
+    },
+    "linux-libc-dev": {
+      "arch": "arm64",
+      "bytes": 2433732,
+      "sha256": "16277eb380d940c7f24eeb3876906919214eda13e5e97f5f51bd5ca96aae0fbd",
+      "url": "https://deb.debian.org/debian-security/pool/updates/main/l/linux/linux-libc-dev_6.1.192-2_arm64.deb",
+      "version": "6.1.192-2"
+    },
+    "zlib1g": {
+      "arch": "arm64",
+      "bytes": 82744,
+      "sha256": "52b8b8a145bbe1956bba82034f77022cbef0c3d0885c9e32d9817a7932fe1913",
+      "url": "https://deb.debian.org/debian/pool/main/z/zlib/zlib1g_1.2.13.dfsg-1_arm64.deb",
+      "version": "1:1.2.13.dfsg-1"
+    },
+    "zlib1g-dev": {
+      "arch": "arm64",
+      "bytes": 912840,
+      "sha256": "afb60f0bae432f2f0edfe2d674e99c1a13a147c9aa2b52f2f23e3df19ece76f5",
+      "url": "https://deb.debian.org/debian/pool/main/z/zlib/zlib1g-dev_1.2.13.dfsg-1_arm64.deb",
+      "version": "1:1.2.13.dfsg-1"
+    }
+  },
+  "schema": 1,
+  "suite": "bookworm"
+}

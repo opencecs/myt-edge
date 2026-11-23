@@ -4,9 +4,9 @@ Build from the three public source repositories on Linux. For a formal release, 
 
 ## Prepare the host
 
-Use a Linux host with Python 3, Git and sufficient space for the source checkout, package cache, root filesystem staging directory and disk images. The full build needs privileges for mounting filesystems and creating a Debian ARM64 userspace. On an x86-64 host, set up ARM64 emulation with `qemu-aarch64-static` and binfmt.
+Use a Linux host with Python 3.11 or later, Git and sufficient space for the source checkout, package cache, root filesystem staging directory and disk images. The full build needs privileges for mounting filesystems and creating a Debian ARM64 userspace. On an x86-64 host, set up ARM64 emulation with `qemu-aarch64-static` and binfmt.
 
-Install the host build tools before running preflight. These include `make`, `gcc`, an ARM64 cross-compiler, `debootstrap`, `dpkg-deb`, `grub-file`, `grub-script-check`, `depmod`, `fdtget`, `zstd`, `pigz`, ext4 and FAT utilities, `mtools` and Android sparse image tools. `build.sh check` reports missing tools or mismatched inputs.
+Install the host build tools before running preflight. These include `make`, `gcc`, an ARM64 cross-compiler, `pkg-config`, `curl`, `debootstrap`, `dpkg-deb`, `grub-file`, `grub-script-check`, `depmod`, `fdtget`, `zstd`, `pigz`, ext4 and FAT utilities, `mtools` and Android sparse image tools. `build.sh check` reports missing tools or mismatched inputs.
 
 ## Obtain the inputs
 
@@ -34,7 +34,15 @@ For the Windows tools, download [Android Platform Tools 35.0.2 for Windows](http
 
 On an x86-64 Linux host, download [Arm GNU Toolchain 12.3.Rel1 for AArch64 Linux](https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/12.3.rel1/binrel/arm-gnu-toolchain-12.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz). Verify SHA256 `960ec0bce309528f603639d8228ef39e6fb9185289ff42b01aa3b4de315accef` and unpack it as `kernel-toolchain-12.3` under `inputs.dependencies`.
 
-Obtain the pinned GRUB EFI and qualified board kernel bundle separately from the release operator. The CIX sysroot is also a separate input under `inputs.dependencies/cix-sysroot`.
+Obtain the pinned GRUB EFI and qualified board kernel bundle separately from the release operator.
+
+Prepare the ARM64 sysroot from pinned Debian 12 packages. From the `myt-edge` checkout, set `DEPENDENCIES` to the absolute directory you will use as `inputs.dependencies` and run:
+
+```sh
+python3 scripts/prepare_public_sysroot.py --output "$DEPENDENCIES"
+```
+
+The script uses `curl` and `dpkg-deb` to download, verify and extract the locked packages into `$DEPENDENCIES/cix-sysroot`. Use a fresh output directory if you already have a sysroot.
 
 Debian packages are fetched according to the [root filesystem lock](https://github.com/opencecs/cix-rootfs/blob/main/fetch/rootfs-packages.json). The public build validates the board, signature and compatibility of the signed MCU assets. Factory provisioning must already have left at least one usable network port. The public image inspects NIC identity and permanent MAC addresses at boot. The public build omits the Realtek PG factory program.
 
