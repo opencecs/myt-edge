@@ -31,7 +31,7 @@
     },
     "host/y4-mcu-maintain": {
       "bytes": 298464,
-      "sha256": "1e6fc90f082cc06626573a79fe4671e181b9505365289d44a5288c1f128fffe2"
+      "sha256": "ddbbf6fd848fed6f83cbc6ac149b089499ce80cdd7748fa5d9e6927828d620c5"
     },
     "host/y4-mcu-reset": {
       "bytes": 71648,
@@ -51,11 +51,11 @@
     },
     "mcu-builtin.json": {
       "bytes": 487,
-      "sha256": "b5ca78b93691c123b5ce02ea616650ccea5ff9767e7a4acc20fafd7ef764b1c9"
+      "sha256": "4d6eb8d197fc526b87f9c774cd5eb138a270e3cac340b91d5cfb14340101a08e"
     },
     "mcu-package.bin": {
       "bytes": 152458,
-      "sha256": "42b121662399eec30dfd6d525e974d25292421a8e66bae17dd51ec849b919a6e"
+      "sha256": "ab6aa97bb67f5f698be846215bb9148a8b78134bf9b60fd887adbe090a5836b9"
     },
     "mcu-public-key.bin": {
       "bytes": 32,
