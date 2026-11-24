@@ -1,8 +1,8 @@
 {
   "boards": {
     "Y12": {
-      "mcu_manifest_sha256": "ac726e3938ba3205992243451c60dd0ac88df24d91946729dce8023ba0e80ee0",
-      "spi_sha256": "5cfa7ca8d094feedf1e7f2954e350edc8da55372ddfa5f1b4740035be32669c9"
+      "mcu_manifest_sha256": "ab995fcd71f37247ae41dd7c3596d204c2b7a9077d0d972fba47727bd1eee0d7",
+      "spi_sha256": "5bea0fe04c862b49c734628d9fb8c64c125013df270aaebc7275b1ed54d5f24d"
     },
     "Y4": {
       "mcu_manifest_sha256": "005e3fce1583fb89f9fa36344b62ecbc0ac016ed43b0b170931c11e63dc18c18",
@@ -10,8 +10,8 @@
     }
   },
   "panel": {
-    "gzip_sha256": "328962a29c61e2e2c247ff45d74cda8e90068f03cfa578413858e9b4021f1888",
-    "manifest_sha256": "d00505895ead0a42b4dfb45b85bdc18950e4af1488da479d3c149556dc107b0e"
+    "gzip_sha256": "9b61b2a31fa23c7c9e673193bed34a1677c1a4856f355057499dd7a6c91c09ef",
+    "manifest_sha256": "5a198c2e67b804437ad195d0ff61f6a85296feab548812928d0441785912f7f8"
   },
   "schema": 1
 }
