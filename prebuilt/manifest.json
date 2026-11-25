@@ -5,13 +5,13 @@
       "spi_sha256": "86847ba6c99fd7e704233e709acf914888559faaf74f7cb6b768dc463540fff8"
     },
     "Y4": {
-      "mcu_manifest_sha256": "692ed022c0f850a77655e6a19f1d04f482df34abbee184a110a59a4a8b99f9f7",
-      "spi_sha256": "55da17487d00f0fd5af54a083af66ab337d40b926035fe6a46e5cae4b1786600"
+      "mcu_manifest_sha256": "4148e28b75890829f6a16fdc2cb500c32ef1ee464baab20652f94f0d0e321614",
+      "spi_sha256": "5c68ab02f5016888fe05f8f1fd7553653adf93279fca27766e03fb7b2094315e"
     }
   },
   "panel": {
-    "gzip_sha256": "0cc21b3b05620a364e3a7e56be67f5add4705e31380874e0512fbeb0efc48904",
-    "manifest_sha256": "eed6de774318c4b5cdc1d4679061c65ec560e2c3cdd0e551648c664730c12cf5"
+    "gzip_sha256": "33acf75495db52b971960ae3e9ccc45d7ceca1267f2f466d51100617c09d303d",
+    "manifest_sha256": "2ecb0c159ff770541d9f329b28ad41b0faae34cd3eff5558e99e21cf776359fc"
   },
   "schema": 1
 }
