@@ -13,7 +13,7 @@
 
 ## 2. 通用约定
 
-**成功响应**：200（查询/确认完成）、202（大上传已受理，处理异步进行）。所有响应体含 `"schema":1`。
+**成功响应**：200（查询/确认完成）、202（大上传已受理，处理异步进行）。成功响应体含 `"schema":1`。
 
 **错误响应**（全部路由统一）：
 
@@ -63,10 +63,62 @@
 
 ### SSH 管理
 
-新装 Y4、Y12 默认启用 OpenSSH，初始账号为 `root`，初始密码为 `myt`。GET 和开关操作返回 `enabled`（开机启用）、`running`（受 systemd 管理的 SSH 服务或监听 socket 当前就绪）及 `service_enabled`、`service_running`、`socket_enabled`、`socket_running`。SSH 开关同时处理 `ssh.service` 和 `ssh.socket`。关闭后新连接失去受管入口，已建立的会话仍按 OpenSSH 和 systemd 的策略结束。当前 SSH 隧道关闭后，可通过网页管理或本机控制台重新开启。
+Y4、Y12 使用同一套接口。新装系统默认启动 OpenSSH，初始账号为 `root`，初始密码为 `myt`。开关和密码保存在当前系统槽中，普通重启后保留。切换系统槽后重新读取状态。
 
-写请求限 2048 字节。密码接受 6 至 256 UTF-8 字节，系统 PAM 可施加额外规则。密码请求成功只返回 `{"schema":1,"status":0}`。密码及启用状态由当前系统槽的 Debian 配置保存。各 SSH 请求串行处理。已有请求在执行时返回 409，状态读取可稍后重试。单元操作超时或回滚无法确认时，读取状态确认实际结果；客户端断开后，已受理的操作可能继续完成。
+#### 面板接入
 
+面板后端通过 `/run/y4-board/api.sock` 发起 HTTP/1.1 请求。套接字为 root 所有，权限 `0600`，板载服务还核验连接对端的 UID 为 `0`。面板自己的身份验证继续在后端执行，开关和改密仅授权给管理员。通过面板本机 socket 调用时，操作无需依赖 SSH 隧道。
+
+| 方法 | 路径 | 请求 | HTTP 200 响应 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/ssh` | 无请求体 | SSH 状态 |
+| POST | `/api/v1/ssh` | `{"enabled":true}` 开启，`{"enabled":false}` 关闭 | 操作完成后的 SSH 状态 |
+| POST | `/api/v1/ssh/password` | `{"username":"root","password":"<新密码>"}` | `{"schema":1,"status":0}` |
+
+状态示例：
+
+```json
+{
+  "schema": 1,
+  "device": "Y4",
+  "enabled": true,
+  "running": true,
+  "service_enabled": true,
+  "service_running": true,
+  "socket_enabled": false,
+  "socket_running": false
+}
+```
+
+- `enabled` 表示至少一个受管 OpenSSH 单元已持久设置为开机启用。`running` 表示 systemd 管理的服务或监听 socket 当前就绪，两项状态独立。界面可分别显示当前运行与开机启用情况。
+- 开关按目标状态设置。关闭时同时停止并禁用 `ssh.socket` 和 `ssh.service`，阻止建立新的 SSH 连接。已建立的会话按 OpenSSH 和 systemd 单元策略处理。从本机控制台或面板可以重新开启。
+- 写请求带 `Content-Type: application/json` 和 `Content-Length`，正文最多 2048 字节。每次请求用短连接。API 拒绝 `Transfer-Encoding: chunked` 和 `Expect`。
+- 用户名须为已有可登录的本机 Linux 账号，格式为 `[A-Za-z_][A-Za-z0-9_-]{0,31}`。密码解码后须为 6 至 256 UTF-8 字节，系统 PAM 可以施加额外要求。改密会更新同一个 Linux 账号的系统密码。面板的请求日志、错误响应和审计记录不得包含密码。
+
+#### 错误与超时
+
+错误体为 `{"status":-16,"error":"ssh_busy"}` 这样的对象。`status` 是负 errno，`error` 是稳定的错误标识。
+
+| HTTP | 标识 | 处理 |
+| --- | --- | --- |
+| 400 | `ssh_request_invalid`、`ssh_password_invalid` | 检查字段、密码格式及长度 |
+| 403 | `ssh_unit_access_denied`、`ssh_password_rejected` | 显示系统单元权限或 PAM 拒绝 |
+| 404 | `ssh_user_not_found` | 目标系统账号不存在 |
+| 404 | `unknown_route` | 旧版板载服务可能缺少接口，显示功能不可用 |
+| 409 | `ssh_busy`、`ssh_unit_busy`、`ssh_password_busy` | 等待当前操作完成，退避后刷新 SSH 状态 |
+| 408 | `ssh_unit_timeout`、`request_deadline` | 开关结果需重新查询 |
+| 503 | `ssh_unit_state_uncertain`、`ssh_service_unavailable`、`ssh_worker_unavailable`、`ssh_password_change_failed` | 显示操作失败或状态未知，按操作类型确认结果 |
+
+状态查询可设约 4 秒客户端超时，写操作约 65 秒。板端先等待最多 60 秒，客户端断开后已受理请求仍可能完成。开关超时、连接中断或状态不确定时，先 GET 查实际状态。GET 无法判定改密结果，提示用户先验证凭据，避免自动重发改密请求。
+
+#### 在设备本机调试
+
+```sh
+curl --unix-socket /run/y4-board/api.sock http://localhost/api/v1/ssh
+curl --unix-socket /run/y4-board/api.sock \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"enabled":true}' http://localhost/api/v1/ssh
+```
 
 ## 4. GET /api/v1/hardware —— 字段字典
 

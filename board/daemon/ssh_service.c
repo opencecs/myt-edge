@@ -220,15 +220,44 @@ static int change_running(struct systemd_operation *op, enum ssh_unit id, bool r
  return rc;
 }
 
+static int stop_ssh_units(struct systemd_operation *op,
+                          const struct unit_state units[SSH_UNIT_COUNT],
+                          unsigned int changes[SSH_UNIT_COUNT])
+{
+ for (int i = SOCKET; i >= SERVICE; --i) {
+  if (!units[i].active && !units[i].transitioning) continue;
+  changes[i] |= CHANGE_ACTIVE;
+  int rc = change_running(op, (enum ssh_unit)i, false);
+  if (rc) return rc;
+ }
+ return 0;
+}
+
+static int reload_unit_files(struct systemd_operation *op)
+{
+ return call(op, SYSTEMD_PATH, MANAGER, "Reload", NULL, G_VARIANT_TYPE_UNIT, NULL);
+}
+
 static int restore(struct systemd_operation *op, const struct unit_state before[SSH_UNIT_COUNT],
-                   const unsigned int changes[SSH_UNIT_COUNT], struct y4_ssh_status *status)
+                   unsigned int changes[SSH_UNIT_COUNT], struct y4_ssh_status *status)
 {
  struct unit_state now[SSH_UNIT_COUNT];
  int rc = read_state(op, now, status);
  if (rc) return rc;
  bool files_changed = false;
  int restore_error = 0;
- for (enum ssh_unit i = SERVICE; i < SSH_UNIT_COUNT; ++i) {
+ /* systemd 252 can lose track of a live sshd during Reload if the unit's
+  * install alias sshd.service was added or removed. Quiesce both activation
+  * paths before changing the alias back, then restore the previous mode. */
+ if ((changes[SERVICE] & CHANGE_FILES) && before[SERVICE].boot != now[SERVICE].boot) {
+  restore_error = stop_ssh_units(op, now, changes);
+  rc = read_state(op, now, status);
+  if (rc) return rc;
+  if (now[SERVICE].active || now[SERVICE].transitioning ||
+      now[SOCKET].active || now[SOCKET].transitioning)
+   restore_error = -EBUSY;
+ }
+ for (enum ssh_unit i = SERVICE; !restore_error && i < SSH_UNIT_COUNT; ++i) {
   if (!(changes[i] & CHANGE_FILES) || before[i].boot == now[i].boot) continue;
   unsigned int remove = now[i].boot & ~before[i].boot;
   unsigned int add = before[i].boot & ~now[i].boot;
@@ -241,7 +270,7 @@ static int restore(struct systemd_operation *op, const struct unit_state before[
   files_changed = true;
  }
  if (files_changed) {
-  rc = call(op, SYSTEMD_PATH, MANAGER, "Reload", NULL, G_VARIANT_TYPE_UNIT, NULL);
+  rc = reload_unit_files(op);
   if (rc) restore_error = rc;
  }
  for (int i = SOCKET; i >= SERVICE; --i) {
@@ -278,31 +307,32 @@ static int set_state(struct systemd_operation *op, bool enabled, struct y4_ssh_s
    selected = SOCKET;
   if (before[SERVICE].masked || before[selected].masked) return -EPERM;
   if (!before[SERVICE].present || !before[selected].present) return -ENOENT;
-  if (!before[selected].running) {
+  if (!(before[selected].boot & BOOT_PERSISTENT)) {
+   if (selected == SERVICE)
+    rc = stop_ssh_units(op, before, changes);
+   if (!rc) {
+    changes[selected] |= CHANGE_FILES;
+    rc = change_files(op, selected, true, false);
+   }
+   if (!rc) rc = reload_unit_files(op);
+  }
+  if (!rc && (!before[selected].running || (changes[selected] & CHANGE_ACTIVE))) {
    changes[selected] |= CHANGE_ACTIVE;
    rc = change_running(op, selected, true);
-  }
-  if (!rc && !(before[selected].boot & BOOT_PERSISTENT)) {
-   changes[selected] |= CHANGE_FILES;
-   rc = change_files(op, selected, true, false);
   }
  } else {
   /* First close socket activation so it cannot restart ssh.service while the
    * service stop job runs. Existing login processes follow the unit's KillMode. */
-  for (int i = SOCKET; !rc && i >= SERVICE; --i) {
-   if (!before[i].active) continue;
-   changes[i] |= CHANGE_ACTIVE;
-   rc = change_running(op, (enum ssh_unit)i, false);
-  }
+  rc = stop_ssh_units(op, before, changes);
   for (enum ssh_unit i = SERVICE; !rc && i < SSH_UNIT_COUNT; ++i) {
    if (!before[i].boot) continue;
    changes[i] |= CHANGE_FILES;
    rc = change_files(op, i, false, false);
    if (!rc) rc = change_files(op, i, false, true);
   }
+  if (!rc && ((changes[SERVICE] | changes[SOCKET]) & CHANGE_FILES))
+   rc = reload_unit_files(op);
  }
- if (!rc && ((changes[SERVICE] | changes[SOCKET]) & CHANGE_FILES))
-  rc = call(op, SYSTEMD_PATH, MANAGER, "Reload", NULL, G_VARIANT_TYPE_UNIT, NULL);
  if (!rc) rc = read_state(op, after, status);
  if (!rc && enabled &&
      (!after[selected].running || !(after[selected].boot & BOOT_PERSISTENT)))

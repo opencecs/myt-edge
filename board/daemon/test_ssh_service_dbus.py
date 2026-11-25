@@ -37,6 +37,7 @@ class Unit(dbus.service.Object):
         self.name = name
         self.boot = boot
         self.active = active
+        self.start_without_listening = False
         path = PATH + "/unit/" + name.replace(".", "_2e")
         super().__init__(bus, path)
 
@@ -47,7 +48,8 @@ class Unit(dbus.service.Object):
             "LoadState": "masked" if self.boot == "masked" else "loaded",
             "ActiveState": self.active if isinstance(self.active, str) else
                            ("active" if self.active else "inactive"),
-            "SubState": ("listening" if self.name == SOCKET else "running") if self.active else "dead",
+            "SubState": ("exited" if self.start_without_listening else
+                         ("listening" if self.name == SOCKET else "running")) if self.active else "dead",
         }
 
 
@@ -61,9 +63,12 @@ class Manager(dbus.service.Object):
     def configure(self, s_boot="disabled", s_active=False, x_boot="disabled", x_active=False):
         self.units[SERVICE].boot = s_boot
         self.units[SERVICE].active = s_active
+        self.units[SERVICE].start_without_listening = False
         self.units[SOCKET].boot = x_boot
         self.units[SOCKET].active = x_active
         self.fail_start = False
+        self.start_without_listening = False
+        self.alias_changed = False
         self.delay_signal = False
         self.fail_disable = None
         self.operations = []
@@ -102,6 +107,7 @@ class Manager(dbus.service.Object):
             result = "failed"
         else:
             unit.active = start
+            unit.start_without_listening = name == SERVICE and start and self.start_without_listening
             result = "done"
         # Deliver a stale job completion and the target completion before
         # replying to StartUnit/StopUnit. The client must accept just its job.
@@ -123,8 +129,13 @@ class Manager(dbus.service.Object):
     @dbus.service.method(MANAGER, in_signature="asbb", out_signature="ba(sss)")
     def EnableUnitFiles(self, names, runtime, force):
         assert not force
-        self.operations.append(("enable", str(names[0]), bool(runtime)))
-        self.unit(names[0]).boot = "enabled-runtime" if runtime else "enabled"
+        name = names[0]
+        self.operations.append(("enable", str(name), bool(runtime)))
+        unit = self.unit(name)
+        new_boot = "enabled-runtime" if runtime else "enabled"
+        if name == SERVICE and new_boot != unit.boot:
+            self.alias_changed = True
+        unit.boot = new_boot
         return True, []
 
     @dbus.service.method(MANAGER, in_signature="asb", out_signature="a(sss)")
@@ -136,11 +147,18 @@ class Manager(dbus.service.Object):
             raise AccessDenied("Read-only policy")
         if unit.boot == ("enabled-runtime" if runtime else "enabled"):
             unit.boot = "disabled"
+            if name == SERVICE:
+                self.alias_changed = True
         return []
 
     @dbus.service.method(MANAGER)
     def Reload(self):
         self.operations.append(("reload",))
+        if self.alias_changed:
+            # Debian 12 systemd can lose sshd's PID when Reload rekeys a
+            # running ssh.service after its sshd.service alias is changed.
+            assert not self.units[SERVICE].active
+            self.alias_changed = False
 
 
 CLIENT = """
@@ -179,6 +197,12 @@ def tests(client, manager):
     assert run_client(client, "enable") == "ok 11 11 00"
     assert not manager.operations
 
+    manager.configure("disabled", True)
+    assert run_client(client, "enable") == "ok 11 11 00"
+    assert manager.operations == [
+        ("stop", SERVICE), ("enable", SERVICE, False), ("reload",), ("start", SERVICE)]
+    assert run_client(client, "disable") == "ok 00 00 00"
+
     manager.configure(x_boot="enabled", x_active=True)
     assert run_client(client, "status") == "ok 11 00 11"
     assert run_client(client, "enable") == "ok 11 00 11"
@@ -211,7 +235,16 @@ def tests(client, manager):
     manager.configure()
     manager.fail_start = True
     assert run_client(client, "enable") == "failed 00 00 00"
-    assert manager.operations == [("start", SERVICE)]
+    assert manager.operations == [
+        ("enable", SERVICE, False), ("reload",), ("start", SERVICE),
+        ("disable", SERVICE, False), ("reload",)]
+
+    manager.configure()
+    manager.start_without_listening = True
+    assert run_client(client, "enable") == "failed 00 00 00"
+    assert manager.operations == [
+        ("enable", SERVICE, False), ("reload",), ("start", SERVICE),
+        ("stop", SERVICE), ("disable", SERVICE, False), ("reload",)]
 
     manager.configure("enabled", True, "enabled", True)
     manager.fail_disable = SOCKET
