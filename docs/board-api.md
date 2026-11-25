@@ -7,13 +7,13 @@
 | 项 | 值 |
 |---|---|
 | 监听 | **Unix 流套接字 `/run/y4-board/api.sock`**，0600，仅 root 可连（即鉴权边界） |
-| 协议 | HTTP/1.1；响应恒为 `application/json`；`Connection: close`；`Cache-Control: no-store` |
+| 协议 | HTTP/1.1。普通响应为 `application/json`，事件流为 `text/event-stream`。响应均设置 `Connection: close` 和 `Cache-Control: no-store`。 |
 | 远程访问 | `ssh root@<板IP> -L 18080:/run/y4-board/api.sock -N` 后访问 `http://127.0.0.1:18080` |
 | 大文件上传 | >2 GB 不要用 macOS 系统 curl（off_t 限制）；用 Python `http.client` 流式发送 |
 
 ## 2. 通用约定
 
-**成功响应**：200（查询/确认完成）、202（大上传已受理，处理异步进行）。成功响应体含 `"schema":1`。
+**成功响应**：200（查询、确认完成或打开事件流）、202（大上传已受理，处理异步进行）。成功的 JSON 响应和每条资源事件数据含 `"schema":1`。
 
 **错误响应**（全部路由统一）：
 
@@ -60,6 +60,8 @@
 | 14 | GET | `/api/v1/ssh` | 无 | Y4、Y12 的 OpenSSH 启用和运行状态 |
 | 15 | POST | `/api/v1/ssh` | `{"enabled":true}` 或 `{"enabled":false}` | 启停受管的 OpenSSH 单元，同步开机启用状态 |
 | 16 | POST | `/api/v1/ssh/password` | `{"username":"root","password":"<新密码>"}` | 通过 Debian PAM 修改当前槽中的本机登录密码 |
+| 17 | GET | `/api/v1/system/resources` | 无 | 整机 CPU 和内存的最新快照 |
+| 18 | GET | `/api/v1/events` | 无 | SSE 事件流，目前发送 `system-resources` |
 
 ### SSH 管理
 
@@ -119,6 +121,45 @@ curl --unix-socket /run/y4-board/api.sock \
   -H 'Content-Type: application/json' \
   --data-binary '{"enabled":true}' http://localhost/api/v1/ssh
 ```
+
+### 整机资源与实时事件
+
+Y4、Y12 都从内核 `/proc/stat` 和 `/proc/meminfo` 约每秒采样一次。GET 和所有 SSE 订阅者共享最新快照。
+
+```json
+{
+  "schema": 1,
+  "device": "Y4",
+  "sampled_ms": 124000,
+  "cpu": {"usage_percent": 12.3},
+  "memory": {
+    "total_bytes": 24000000000,
+    "available_bytes": 12000000000,
+    "used_bytes": 12000000000,
+    "usage_percent": 50.0
+  }
+}
+```
+
+- `sampled_ms` 是自本次开机以来的单调时钟值，单位为毫秒。CPU 占用按相邻样本之间的整机忙碌时间计算，I/O 等待归入空闲。daemon 首次采样、计数复位或读取失败时 `cpu` 为 `null`。
+- 内存已用量等于 `MemTotal - MemAvailable`。内存数值为字节，使用率为 0–100。无法取得有效内存统计时 `memory` 为 `null`，另一项可独立使用。
+
+```sh
+curl --unix-socket /run/y4-board/api.sock http://localhost/api/v1/system/resources
+curl -N --unix-socket /run/y4-board/api.sock http://localhost/api/v1/events
+```
+
+SSE 响应以 `text/event-stream` 持续发送。连接后立即收到最新快照，此后每次发布一条同格式的消息。
+
+```text
+event: system-resources
+data: {"schema":1,"device":"Y4","sampled_ms":124000,"cpu":null,"memory":null}
+
+```
+
+- 读取 `system-resources` 事件的 JSON `data`。客户端可忽略将来增加的其他命名事件。重连会拿到当时的最新快照，流不提供历史回放。
+- SSE 独立提供两个订阅位置。超过上限返回 HTTP 503 `event_stream_limit`，客户端可以退避重连或暂时用普通 GET。单个订阅积压时最多暂存一条待发消息，后续追上最新采样。写入受阻约五秒会关闭该连接，释放位置。
+- 面板后端可复用一条 Unix socket 订阅连接，再把事件分发给已鉴权的网页连接。转发时按事件刷新并关闭代理缓冲，给上游设置响应头超时，连接期间避免整次响应总超时。页面关闭或会话被撤销时断开对应下游连接。
 
 ## 4. GET /api/v1/hardware —— 字段字典
 

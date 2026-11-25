@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #include "board_daemon.h"
 #include "ssh_api.h"
+#include "resources.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -26,6 +27,9 @@
 #include <unistd.h>
 #include "vendor/y4_os_fan_policy.h"
 #define CLIENTS 8u
+#define EVENT_CLIENTS 2u
+#define RESOURCE_INTERVAL_MS 1000u
+#define EVENT_WRITE_TIMEOUT_MS 5000u
 #define HEADER_BYTES 4096u
 #define RESPONSE_BYTES 24576u
 #define UPLOAD_TIME_MS 120000u
@@ -34,7 +38,7 @@
 #define FANS_BODY_LIMIT 512u
 #define SSH_REPLY_TIMEOUT_MS 60000u
 struct client {
- int fd,upload_fd,parsed,response,upload_reserved,ota,fans_post;
+ int fd,upload_fd,parsed,response,upload_reserved,ota,fans_post,subscribe;
  char header[HEADER_BYTES+1],output[RESPONSE_BYTES];
  size_t header_bytes,out_bytes,out_sent,expected,received;
  uint64_t deadline;
@@ -44,6 +48,12 @@ struct client {
  enum y4_ssh_operation ssh_operation;
  uint64_t ssh_request;
  char ssh_body[Y4_SSH_BODY_LIMIT+1u];
+};
+struct event_client {
+ int fd;
+ size_t bytes,sent;
+ uint64_t deadline,sequence;
+ char output[Y4_RESOURCE_JSON_CAP+256u];
 };
 struct update_job {
  pid_t pid;
@@ -59,6 +69,9 @@ static ino_t socket_inode;
 static int socket_owned;
 static struct update_job job;
 static struct y4_board_sample sample;
+static struct y4_resource_sampler resource_sampler;
+static char resource_json[Y4_RESOURCE_JSON_CAP];
+static uint64_t resource_sequence,resource_next;
 static void stop(int sig){(void)sig;y4_board_stopping=1;}
 static int valid_hex(const char *s,size_t n) {
  if(strlen(s)!=n)return 0;
@@ -269,6 +282,71 @@ static void response(struct client*c,unsigned code,const char *body) {
 }
 static void error_response(struct client*c,unsigned code,int status,const char *message) {
  char text[256];(void)snprintf(text,sizeof text,"{\"status\":%d,\"error\":\"%s\"}\n",status,message);response(c,code,text);
+}
+static void resource_tick(uint64_t now) {
+ if(now<resource_next)return;
+ resource_next=now+RESOURCE_INTERVAL_MS;
+ if(y4_resource_refresh(&resource_sampler,now,resource_json,sizeof resource_json)<0) {
+  resource_json[0]=0;
+  return;
+ }
+ ++resource_sequence;
+}
+
+static void event_close(struct event_client *stream) {
+ if(stream->fd>=0)close(stream->fd);
+ *stream=(struct event_client){.fd=-1};
+}
+
+static int event_queue(struct event_client *stream,int opening,uint64_t now) {
+ static const char preamble[]=
+  "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n"
+  "Connection: close\r\nCache-Control: no-store, no-transform\r\n"
+  "X-Accel-Buffering: no\r\n\r\nretry: 2000\n\n";
+ int n=snprintf(stream->output,sizeof stream->output,"%sevent: system-resources\ndata: %s\n\n",
+                opening?preamble:"",resource_json);
+ if(n<0||(size_t)n>=sizeof stream->output)return -EOVERFLOW;
+ stream->bytes=(size_t)n;
+ stream->sent=0;
+ stream->deadline=now+EVENT_WRITE_TIMEOUT_MS;
+ stream->sequence=resource_sequence;
+ return 0;
+}
+
+/* Only a validated and root-authenticated HTTP request is promoted.
+ * A subscriber holds a streaming slot instead of a regular request slot. */
+static void event_subscribe(struct client *c,struct event_client streams[EVENT_CLIENTS]) {
+ if(!resource_json[0]){error_response(c,503,-EAGAIN,"observation_unavailable");return;}
+ for(unsigned i=0;i<EVENT_CLIENTS;i++) {
+  struct event_client *stream=&streams[i];
+  if(stream->fd>=0)continue;
+  /* Keep the in-kernel socket backlog small for lagging readers as well. */
+  const int send_buffer=4096;
+  if(setsockopt(c->fd,SOL_SOCKET,SO_SNDBUF,&send_buffer,sizeof send_buffer)) {
+   error_response(c,503,-errno,"event_stream_unavailable");
+   return;
+  }
+  if(event_queue(stream,1,y4_board_now_ms())) {
+   error_response(c,500,-EOVERFLOW,"response_overflow");
+   return;
+  }
+  stream->fd=c->fd;
+  c->fd=-1;
+  client_close(c);
+  return;
+ }
+ error_response(c,503,-EBUSY,"event_stream_limit");
+}
+
+static void event_io(struct event_client *stream,short events,uint64_t now) {
+ if(stream->fd<0)return;
+ if(events&(POLLERR|POLLNVAL|POLLHUP)) {event_close(stream);return;}
+ if(stream->sent==stream->bytes)return;
+ if(now>=stream->deadline){event_close(stream);return;}
+ if(!(events&POLLOUT))return;
+ ssize_t n=send(stream->fd,stream->output+stream->sent,stream->bytes-stream->sent,MSG_NOSIGNAL);
+ if(n>0)stream->sent+=(size_t)n;
+ else if(n<0&&errno!=EAGAIN&&errno!=EWOULDBLOCK&&errno!=EINTR)event_close(stream);
 }
 static int initialization_admission(void) {
  char text[8192],current[64],recorded[40];size_t bytes=0;
@@ -499,6 +577,12 @@ static void route(struct client*c,char*header) {
  if(!strcmp(method,"GET")) {
   if(length){error_response(c,400,-EPROTO,"get_body_unavailable");return;}
   if(!strcmp(path,"/api/v1/ssh")){ssh_submit(c,Y4_SSH_STATUS,NULL,0);return;}
+  if(!strcmp(path,"/api/v1/system/resources")){
+   if(resource_json[0])response(c,200,resource_json);
+   else error_response(c,503,-EAGAIN,"observation_unavailable");
+   return;
+  }
+  if(!strcmp(path,"/api/v1/events")){c->subscribe=1;return;}
   char body[16000];int n;
   if(!strcmp(path,"/api/v1/hardware"))n=y4_board_sample_json(&sample,body,sizeof body);
   else if(!strcmp(path,"/api/v1/version"))n=y4_board_version_json(&sample,body,sizeof body);
@@ -576,7 +660,7 @@ static void route(struct client*c,char*header) {
  int e=upload_admit(c);if(e){error_response(c,e==-EBUSY?409u:e==-ENOSPC?507u:503u,e,"upload_admission_failed");return;}
  c->parsed=1;c->deadline=y4_board_now_ms()+UPLOAD_TIME_MS;
 }
-static void client_read(struct client*c) {
+static void client_read(struct client*c,struct event_client streams[EVENT_CLIENTS]) {
  if(c->parsed) {
   char buf[8192];ssize_t n=recv(c->fd,buf,sizeof buf,0);
   if(n<0){if(errno==EAGAIN||errno==EWOULDBLOCK||errno==EINTR)return;client_close(c);return;}
@@ -599,6 +683,7 @@ static void client_read(struct client*c) {
   c->ssh_request=0;
   error_response(c,400,-EPROTO,"extra_body_bytes");
  }
+ if(c->subscribe&&!c->response)event_subscribe(c,streams);
  explicit_bzero(c->header,sizeof c->header);
 }
 static int listener(void) {
@@ -669,6 +754,8 @@ int main(int argc,char **argv) {
  if(server<0){fprintf(stderr,"y4-board API listener failed status=%d\n",server);y4_board_stopping=1;}
  struct client clients[CLIENTS];memset(clients,0,sizeof clients);
  for(unsigned i=0;i<CLIENTS;i++)clients[i].fd=clients[i].upload_fd=-1;
+ struct event_client streams[EVENT_CLIENTS];
+ for(unsigned i=0;i<EVENT_CLIENTS;i++)streams[i]=(struct event_client){.fd=-1};
  while(!y4_board_stopping) {
   job_tick();y4_board_ota_tick();(void)y4_board_pcie_tick(&pcie);
   if(sample.magic==Y4_BOARD_SAMPLE_MAGIC)(void)y4_board_slot_confirm_tick(&sample);
@@ -684,20 +771,29 @@ int main(int argc,char **argv) {
     }
    }
   }
-  struct pollfd fds[2+CLIENTS];fds[0]=(struct pollfd){server,POLLIN,0};fds[1]=(struct pollfd){monitor>0?channels[0]:-1,POLLIN,0};
+  uint64_t now=y4_board_now_ms();
+  resource_tick(now);
+  struct pollfd fds[2+CLIENTS+EVENT_CLIENTS];fds[0]=(struct pollfd){server,POLLIN,0};fds[1]=(struct pollfd){monitor>0?channels[0]:-1,POLLIN,0};
   for(unsigned i=0;i<CLIENTS;i++)fds[i+2u]=(struct pollfd){clients[i].fd,clients[i].response?POLLOUT:clients[i].ssh_request?0:POLLIN,0};
-  int ready=poll(fds,2u+CLIENTS,100);if(ready<0&&errno!=EINTR){fprintf(stderr,"y4-board poll failed status=%d\n",-errno);break;}
+  for(unsigned i=0;i<EVENT_CLIENTS;i++) {
+   struct event_client *stream=&streams[i];
+   if(stream->fd>=0&&stream->sent==stream->bytes&&resource_json[0]&&
+      stream->sequence!=resource_sequence&&event_queue(stream,0,now))event_close(stream);
+   fds[2u+CLIENTS+i]=(struct pollfd){stream->fd,stream->sent<stream->bytes?POLLOUT:0,0};
+  }
+  int ready=poll(fds,2u+CLIENTS+EVENT_CLIENTS,100);if(ready<0&&errno!=EINTR){fprintf(stderr,"y4-board poll failed status=%d\n",-errno);break;}
   if(fds[0].revents&POLLIN)accept_clients(server,clients);
   if(fds[1].revents&POLLIN)for(unsigned n=0;n<4u;n++) {
    struct y4_board_sample next;ssize_t got=recv(channels[0],&next,sizeof next,MSG_DONTWAIT|MSG_TRUNC);
    if(got<0)break;if(got==(ssize_t)sizeof next&&next.magic==Y4_BOARD_SAMPLE_MAGIC)sample=next;
   }
-  uint64_t now=y4_board_now_ms();
+  now=y4_board_now_ms();
+  for(unsigned i=0;i<EVENT_CLIENTS;i++)event_io(&streams[i],fds[2u+CLIENTS+i].revents,now);
   for(unsigned i=0;i<CLIENTS;i++) {
    struct client*c=&clients[i];if(c->fd<0)continue;
    if(fds[i+2u].revents&(POLLERR|POLLNVAL)){client_close(c);continue;}
    if((fds[i+2u].revents&POLLIN)&&!c->response) {
-    client_read(c);
+    client_read(c,streams);
    }
    if(c->fd<0)continue;
    if(c->response&&(fds[i+2u].revents&POLLOUT)) {
@@ -719,6 +815,7 @@ int main(int argc,char **argv) {
  if(server>=0)close(server);
  if(socket_owned){struct stat current;if(!lstat(Y4_BOARD_SOCKET,&current)&&current.st_dev==socket_device&&current.st_ino==socket_inode)(void)unlink(Y4_BOARD_SOCKET);}
  for(unsigned i=0;i<CLIENTS;i++)client_close(&clients[i]);
+ for(unsigned i=0;i<EVENT_CLIENTS;i++)event_close(&streams[i]);
  if(job.pid>0&&!job.cancel_requested){(void)kill(job.pid,SIGTERM);job.cancel_requested=1;strcpy(job.phase,"cancelling");job_save();}
  /* Do not abandon an active flash helper or claim its exit on a timeout. */
  while(job.pid>0){job_tick();struct timespec t={0,100000000};(void)nanosleep(&t,NULL);}
