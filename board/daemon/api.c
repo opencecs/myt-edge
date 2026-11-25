@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #define _GNU_SOURCE
 #include "board_daemon.h"
+#include "ssh_api.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -31,6 +32,7 @@
 #define OTA_UPLOAD_TIME_MS 3600000u
 #define HELPER_OVERDUE_MS 600000u
 #define FANS_BODY_LIMIT 512u
+#define SSH_REPLY_TIMEOUT_MS 60000u
 struct client {
  int fd,upload_fd,parsed,response,upload_reserved,ota,fans_post;
  char header[HEADER_BYTES+1],output[RESPONSE_BYTES];
@@ -39,6 +41,9 @@ struct client {
  EVP_MD_CTX *digest;
  char job[33],name[64],path[PATH_MAX];
  char fans_body[FANS_BODY_LIMIT+1u];
+ enum y4_ssh_operation ssh_operation;
+ uint64_t ssh_request;
+ char ssh_body[Y4_SSH_BODY_LIMIT+1u];
 };
 struct update_job {
  pid_t pid;
@@ -48,6 +53,7 @@ struct update_job {
  char status_path[PATH_MAX],log_path[PATH_MAX];
 };
 static int upload_busy;
+static uint64_t ssh_sequence;
 static dev_t socket_device;
 static ino_t socket_inode;
 static int socket_owned;
@@ -245,7 +251,7 @@ static void client_close(struct client*c) {
  if(c->upload_reserved)upload_busy=0;
  if(c->digest)EVP_MD_CTX_free(c->digest);
  if(*c->path)(void)unlink(c->path); /* Only this unsubmitted upload is owned. */
- memset(c,0,sizeof *c);c->fd=c->upload_fd=-1;
+ explicit_bzero(c,sizeof *c);c->fd=c->upload_fd=-1;
 }
 static const char *reason(unsigned code) {
  switch(code){case 200:return "OK";case 202:return "Accepted";case 400:return "Bad Request";
@@ -380,7 +386,72 @@ static void fans_finish(struct client*c) {
  if(n<0||(size_t)n>=sizeof body)error_response(c,500,-EOVERFLOW,"response_overflow");
  else response(c,200,body);
 }
+static void ssh_submit(struct client *c, enum y4_ssh_operation operation,
+                       const char *body, size_t length) {
+ uint64_t id=++ssh_sequence;
+ if(!id)id=++ssh_sequence;
+ int e=y4_ssh_api_submit(operation,id,body,length);
+ if(e){
+  unsigned code=e==-EBADMSG?400u:e==-EBUSY?409u:503u;
+  const char *detail=e==-EBADMSG?"ssh_request_invalid":e==-EBUSY?"ssh_busy":"ssh_worker_unavailable";
+  error_response(c,code,e,detail);
+  return;
+ }
+ c->ssh_request=id;
+ c->deadline=y4_board_now_ms()+SSH_REPLY_TIMEOUT_MS;
+}
+static void ssh_reply(struct client *c, const struct y4_ssh_reply *reply) {
+ c->ssh_request=0;
+ int e=reply->result;
+ if(e) {
+  unsigned code=503u;
+  const char *detail="ssh_service_unavailable";
+  if(reply->operation==Y4_SSH_PASSWORD) {
+   detail="ssh_password_change_failed";
+   if(e==-EINVAL){code=400u;detail="ssh_password_invalid";}
+   else if(e==-ENOENT){code=404u;detail="ssh_user_not_found";}
+   else if(e==-EACCES){code=403u;detail="ssh_password_rejected";}
+   else if(e==-EBUSY){code=409u;detail="ssh_password_busy";}
+  } else if(e==-EPERM || e==-EACCES) {
+   code=403u;detail="ssh_unit_access_denied";
+  } else if(e==-EBUSY) {
+   code=409u;detail="ssh_unit_busy";
+  } else if(e==-ETIMEDOUT) {
+   code=408u;detail="ssh_unit_timeout";
+  } else if(e==-EUCLEAN) {
+   detail="ssh_unit_state_uncertain";
+  }
+  error_response(c,code,e,detail);
+  return;
+ }
+ if(reply->operation==Y4_SSH_PASSWORD) {
+  response(c,200,"{\"schema\":1,\"status\":0}\n");
+  return;
+ }
+ const struct y4_ssh_status *status=&reply->status;
+ char body[512];
+ int n=snprintf(body,sizeof body,
+  "{\"schema\":1,\"device\":\"%s\",\"enabled\":%s,\"running\":%s,"
+  "\"service_enabled\":%s,\"service_running\":%s,\"socket_enabled\":%s,\"socket_running\":%s}\n",
+  Y4_DEVICE_ID,status->enabled?"true":"false",status->running?"true":"false",
+  status->service_enabled?"true":"false",status->service_running?"true":"false",
+  status->socket_enabled?"true":"false",status->socket_running?"true":"false");
+ if(n<0||(size_t)n>=sizeof body)error_response(c,500,-EOVERFLOW,"response_overflow");
+ else response(c,200,body);
+}
 static void upload_bytes(struct client*c,const char*data,size_t bytes) {
+ if(c->ssh_operation) {
+  if(bytes>c->expected-c->received){error_response(c,400,-EPROTO,"extra_body_bytes");return;}
+  memcpy(c->ssh_body+c->received,data,bytes);
+  c->received+=bytes;
+  if(c->received==c->expected) {
+   c->ssh_body[c->received]=0;
+   ssh_submit(c,c->ssh_operation,c->ssh_body,c->received);
+   c->ssh_operation=Y4_SSH_NONE;
+   explicit_bzero(c->ssh_body,sizeof c->ssh_body);
+  }
+  return;
+ }
  if(c->fans_post) {
   if(bytes>c->expected-c->received){error_response(c,400,-EPROTO,"extra_body_bytes");return;}
   if(c->received+bytes>sizeof c->fans_body-1u){error_response(c,413,-E2BIG,"fans_body_too_large");return;}
@@ -427,6 +498,7 @@ static void route(struct client*c,char*header) {
  }
  if(!strcmp(method,"GET")) {
   if(length){error_response(c,400,-EPROTO,"get_body_unavailable");return;}
+  if(!strcmp(path,"/api/v1/ssh")){ssh_submit(c,Y4_SSH_STATUS,NULL,0);return;}
   char body[16000];int n;
   if(!strcmp(path,"/api/v1/hardware"))n=y4_board_sample_json(&sample,body,sizeof body);
   else if(!strcmp(path,"/api/v1/version"))n=y4_board_version_json(&sample,body,sizeof body);
@@ -479,6 +551,19 @@ static void route(struct client*c,char*header) {
   c->deadline=y4_board_now_ms()+15000u;
   return;
  }
+ enum y4_ssh_operation operation=Y4_SSH_NONE;
+ if(!strcmp(path,"/api/v1/ssh"))operation=Y4_SSH_SET;
+ else if(!strcmp(path,"/api/v1/ssh/password"))operation=Y4_SSH_PASSWORD;
+ if(operation) {
+  if(!have_length){error_response(c,411,-EINVAL,"content_length_required");return;}
+  if(!length){error_response(c,400,-EINVAL,"ssh_request_invalid");return;}
+  if(length>Y4_SSH_BODY_LIMIT){error_response(c,413,-E2BIG,"ssh_body_too_large");return;}
+  c->expected=length;
+  c->parsed=1;
+  c->ssh_operation=operation;
+  c->deadline=y4_board_now_ms()+15000u;
+  return;
+ }
  if(strcmp(path,"/api/v1/mcu/firmware")){error_response(c,404,-ENOENT,"unknown_route");return;}
  /* The Y12 maintainer currently supports signed verification only.
   * Reject before allocating a staging file or accepting a request body. */
@@ -495,7 +580,11 @@ static void client_read(struct client*c) {
  if(c->parsed) {
   char buf[8192];ssize_t n=recv(c->fd,buf,sizeof buf,0);
   if(n<0){if(errno==EAGAIN||errno==EWOULDBLOCK||errno==EINTR)return;client_close(c);return;}
-  if(!n){client_close(c);return;}upload_bytes(c,buf,(size_t)n);return;
+  if(!n){client_close(c);return;}
+  int ssh_body=c->ssh_operation!=Y4_SSH_NONE;
+  upload_bytes(c,buf,(size_t)n);
+  if(ssh_body)explicit_bzero(buf,(size_t)n);
+  return;
  }
  ssize_t n=recv(c->fd,c->header+c->header_bytes,HEADER_BYTES-c->header_bytes,0);
  if(n<0){if(errno==EAGAIN||errno==EWOULDBLOCK||errno==EINTR)return;client_close(c);return;}
@@ -506,7 +595,11 @@ static void client_read(struct client*c) {
  if(memchr(c->header,0,header)){error_response(c,400,-EPROTO,"nul_header");return;}
  char copy[HEADER_BYTES+1];memcpy(copy,c->header,header);copy[header]=0;route(c,copy);
  if(c->parsed&&!c->response&&extra)upload_bytes(c,c->header+header,extra);
- else if(extra&&!c->parsed&&!c->response)error_response(c,400,-EPROTO,"extra_body_bytes");
+ else if(extra&&!c->parsed&&!c->response){
+  c->ssh_request=0;
+  error_response(c,400,-EPROTO,"extra_body_bytes");
+ }
+ explicit_bzero(c->header,sizeof c->header);
 }
 static int listener(void) {
  int fd=socket(AF_UNIX,SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC,0);if(fd<0)return -errno;
@@ -582,8 +675,17 @@ int main(int argc,char **argv) {
   if(monitor>0){int ws;pid_t got=waitpid(monitor,&ws,WNOHANG);
    if(got==monitor){monitor=0;fprintf(stderr,"y4-board monitor exited raw_status=%d; observations will expire\n",ws);}
    else if(got<0&&errno!=EINTR){monitor_unknown=1;fprintf(stderr,"y4-board monitor ownership lost pid=%ld status=%d\n",(long)monitor,-errno);monitor=0;}}
+  struct y4_ssh_reply ssh;
+  if(y4_ssh_api_take(&ssh)) {
+   for(unsigned i=0;i<CLIENTS;i++) {
+    if(clients[i].fd>=0 && clients[i].ssh_request==ssh.id) {
+     ssh_reply(&clients[i],&ssh);
+     break;
+    }
+   }
+  }
   struct pollfd fds[2+CLIENTS];fds[0]=(struct pollfd){server,POLLIN,0};fds[1]=(struct pollfd){monitor>0?channels[0]:-1,POLLIN,0};
-  for(unsigned i=0;i<CLIENTS;i++)fds[i+2u]=(struct pollfd){clients[i].fd,clients[i].response?POLLOUT:POLLIN,0};
+  for(unsigned i=0;i<CLIENTS;i++)fds[i+2u]=(struct pollfd){clients[i].fd,clients[i].response?POLLOUT:clients[i].ssh_request?0:POLLIN,0};
   int ready=poll(fds,2u+CLIENTS,100);if(ready<0&&errno!=EINTR){fprintf(stderr,"y4-board poll failed status=%d\n",-errno);break;}
   if(fds[0].revents&POLLIN)accept_clients(server,clients);
   if(fds[1].revents&POLLIN)for(unsigned n=0;n<4u;n++) {
@@ -604,7 +706,13 @@ int main(int argc,char **argv) {
     else if(sent<0&&errno!=EAGAIN&&errno!=EWOULDBLOCK&&errno!=EINTR){client_close(c);continue;}
     if(c->out_sent==c->out_bytes){client_close(c);continue;}
    }
-   if(now>=c->deadline){if(c->response)client_close(c);else error_response(c,408,-ETIMEDOUT,"request_deadline");}
+   if(now>=c->deadline){
+    if(c->response)client_close(c);
+    else {
+     c->ssh_request=0;
+     error_response(c,408,-ETIMEDOUT,"request_deadline");
+    }
+   }
    else if(fds[i+2u].revents&POLLHUP){if(!c->response)client_close(c);}
   }
  }

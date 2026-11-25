@@ -20,9 +20,9 @@ override CPPFLAGS += -I$(SOURCE) -I$(SOURCE)/vendor -I$(SOURCE)/../factory -I$(B
 DEVICE ?= Y4
 override CPPFLAGS += -DY4_DEVICE_ID=\"$(DEVICE)\"
 override LDFLAGS += -Wl,--gc-sections
-override LDLIBS += -lcrypto -lzstd $(GIO_LIBS)
+override LDLIBS += -lcrypto -lzstd -lpam $(GIO_LIBS)
 VENDOR := mcu_transport mcu_cooling cooling tmp75_pm mcu_fans mcu_uid mcu_uid_identity mcu_health mcu_backend mcu_backend_transport slots disk_activity crc32c temperature_sample ix_inventory ix_link ix_topology ix_probe ix_bar_collect ix_bar_probe ix_temperature ix_thermal_cache ix_thermal_runtime mcu_ix_display ix_thermal_sampler fan_policy fan1_tach
-LOCAL := api util status monitor poll_adapter pcie display_adapter nm_state update ota
+LOCAL := api ssh_api ssh_service ssh_password util status monitor poll_adapter pcie display_adapter nm_state update ota
 OBJECTS := $(addprefix $(OUT)/,$(addsuffix .o,$(LOCAL))) $(addprefix $(OUT)/vendor/,$(addsuffix .o,$(VENDOR))) $(OUT)/y4_grubenv.o $(OUT)/y4_network.o $(OUT)/y4_display.o
 .PHONY: all
 all: $(OUT)/y4-boardd

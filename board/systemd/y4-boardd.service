@@ -10,6 +10,10 @@ Type=simple
 ExecStart=/usr/sbin/y4-boardd
 Restart=on-failure
 RestartSec=2
+# Keep hardware management available during kernel and userspace OOM handling.
+OOMScoreAdjust=-1000
+ManagedOOMPreference=omit
+OOMPolicy=continue
 RuntimeDirectory=y4-board
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes

@@ -28,7 +28,8 @@
 | 200 OK | 请求完成 | GET 全部、confirm 成功 |
 | 202 Accepted | 上传受理，异步处理 | update / mcu/firmware 收完 |
 | 400 | 参数错 | Content-Length 非法、意外请求体 |
-| 404 | 未知路由 | — |
+| 403 | 权限或策略拒绝 | SSH 单元被屏蔽或 PAM 拒绝修改 |
+| 404 | 路由或账号不存在 | SSH 账号必须已存在于本机 |
 | 405 | 方法不允许 | 方法既非 GET 也非 POST（实测：GET/POST 互打到对方路由返回 404 unknown_route，因为该路由对另一方法不存在） |
 | 408 | 请求超时 | 上传超时（见各端点时限） |
 | 409 | 冲突 | 已有任务在跑（-EBUSY） |
@@ -56,6 +57,16 @@
 | 11 | POST | `/api/v1/mcu/firmware` | MCU 签名固件包（≤1,049,736 B） | Y4 上传内部签名的 MCU 固件包。Y12 返回 503 `mcu_install_unavailable` |
 | 12 | POST | `/api/v1/mcu/cancel` | 必须为空 | 请求取消当前 MCU 烧写 |
 | 13 | GET | `/api/v1/slot-power` | 无 | Y12 槽位状态及功耗 |
+| 14 | GET | `/api/v1/ssh` | 无 | Y4、Y12 的 OpenSSH 启用和运行状态 |
+| 15 | POST | `/api/v1/ssh` | `{"enabled":true}` 或 `{"enabled":false}` | 启停受管的 OpenSSH 单元，同步开机启用状态 |
+| 16 | POST | `/api/v1/ssh/password` | `{"username":"root","password":"<新密码>"}` | 通过 Debian PAM 修改当前槽中的本机登录密码 |
+
+### SSH 管理
+
+新装 Y4、Y12 默认启用 OpenSSH，初始账号为 `root`，初始密码为 `myt`。GET 和开关操作返回 `enabled`（开机启用）、`running`（受 systemd 管理的 SSH 服务或监听 socket 当前就绪）及 `service_enabled`、`service_running`、`socket_enabled`、`socket_running`。SSH 开关同时处理 `ssh.service` 和 `ssh.socket`。关闭后新连接失去受管入口，已建立的会话仍按 OpenSSH 和 systemd 的策略结束。当前 SSH 隧道关闭后，可通过网页管理或本机控制台重新开启。
+
+写请求限 2048 字节。密码接受 6 至 256 UTF-8 字节，系统 PAM 可施加额外规则。密码请求成功只返回 `{"schema":1,"status":0}`。密码及启用状态由当前系统槽的 Debian 配置保存。各 SSH 请求串行处理。已有请求在执行时返回 409，状态读取可稍后重试。单元操作超时或回滚无法确认时，读取状态确认实际结果；客户端断开后，已受理的操作可能继续完成。
+
 
 ## 4. GET /api/v1/hardware —— 字段字典
 

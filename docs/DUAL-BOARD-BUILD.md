@@ -39,7 +39,7 @@ Prepare the ARM64 sysroot from pinned Debian 12 packages. From the `myt-edge` ch
 python3 scripts/prepare_public_sysroot.py --output "$DEPENDENCIES"
 ```
 
-The script uses `curl` and `dpkg-deb` to download, verify and extract the locked packages into `$DEPENDENCIES/cix-sysroot`. Use a fresh output directory if you already have a sysroot.
+The script uses `curl` and `dpkg-deb` to download, verify and extract the locked packages into `$DEPENDENCIES/cix-sysroot`. Use a fresh output directory if you already have a sysroot. Refresh older sysroots with the current lock to include the PAM build dependencies used by boardd.
 
 Debian packages are fetched according to the [root filesystem lock](https://github.com/opencecs/cix-rootfs/blob/main/fetch/rootfs-packages.json). The public build validates the board, signature and compatibility of the signed MCU assets. Factory provisioning must already have left at least one usable network port. The public image inspects NIC identity and permanent MAC addresses at boot. The public build omits the Realtek PG factory program.
 

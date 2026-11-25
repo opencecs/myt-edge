@@ -65,6 +65,14 @@ def prepare(output, cache, mirror):
         loader.symlink_to("../../../lib/aarch64-linux-gnu/ld-linux-aarch64.so.1")
         if not loader.is_file():
             raise ValueError("Missing ARM64 Debian loader")
+        # Debian's PAM development symlink is absolute. Keep cross-link
+        # resolution inside the sysroot instead of falling back to libpam.a.
+        pam_link = libraries / "libpam.so"
+        pam_target = Path("lib/aarch64-linux-gnu/libpam.so.0")
+        if pam_link.readlink() != Path("/") / pam_target or not (sysroot / pam_target).is_file():
+            raise ValueError("Missing locked ARM64 Debian PAM library")
+        pam_link.unlink()
+        pam_link.symlink_to(Path("../../..") / pam_target)
         sysroot.rename(target)
     return target
 

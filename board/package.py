@@ -405,7 +405,7 @@ def build_package(build, output, pg_userspace_only=False):
     control = (
         "Package: y4-board\nVersion: " + verified["version"] + "\nArchitecture: arm64\n"
         "Maintainer: Y4 Debian maintainers <noreply@example.invalid>\nSection: admin\nPriority: optional\n"
-        "Depends: python3, network-manager (>= 1.42), libglib2.0-0 (>= 2.74), libssl3, libc6 (>= 2.34), systemd, kmod\n"
+        "Depends: python3, network-manager (>= 1.42), libglib2.0-0 (>= 2.74), libssl3, libpam0g, libc6 (>= 2.34), systemd, kmod\n"
         "Installed-Size: " + str((size + 1023) // 1024) + "\n"
         "X-MYT-Board: " + receipts["board"] + "\n"
         "X-Y4-Kernel-Release: " + receipts["kernel_release"] + "\n"

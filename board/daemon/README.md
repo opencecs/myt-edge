@@ -117,6 +117,14 @@ archiving that interrupted receipt and explicitly requesting further work.
 
 Running make against this directory's Makefile with an absolute external OUT
 only compiles. For CIX ARM64 use the approved sysroot with both architecture
-and generic system include directories, and the pinned Debian12 libcrypto
-headers/library. Runtime depends on Debian libssl3; no private library path is
-baked into the executable.
+and generic system include directories, the pinned Debian 12 libcrypto
+headers/library and the PAM headers/library. The public sysroot lock supplies
+these build inputs. Runtime uses the Debian libssl3 and libpam0g packages.
+
+SSH management calls systemd over D-Bus and applies local passwords through
+Debian's chpasswd PAM stack. These operations run on a serialized worker so
+the HTTP loop remains available for board observations and other requests.
+
+The board daemon and web panel use the minimum kernel OOM score and opt
+out of systemd-oomd victim selection under the product's default cgroups.
+The services can still encounter failed allocations and unavailable dependencies.
