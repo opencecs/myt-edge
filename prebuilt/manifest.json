@@ -2,11 +2,11 @@
   "boards": {
     "Y12": {
       "mcu_manifest_sha256": "ab995fcd71f37247ae41dd7c3596d204c2b7a9077d0d972fba47727bd1eee0d7",
-      "spi_sha256": "5bea0fe04c862b49c734628d9fb8c64c125013df270aaebc7275b1ed54d5f24d"
+      "spi_sha256": "139cfdc6f6e277bf28f7b09a81e91678ac959efe8c974f41e941621b7b912fd0"
     },
     "Y4": {
       "mcu_manifest_sha256": "692ed022c0f850a77655e6a19f1d04f482df34abbee184a110a59a4a8b99f9f7",
-      "spi_sha256": "c3f22fc1f193e5914e859239993e03feeab8bd0dd6915a3c692a6fcc683b5c64"
+      "spi_sha256": "55da17487d00f0fd5af54a083af66ab337d40b926035fe6a46e5cae4b1786600"
     }
   },
   "panel": {

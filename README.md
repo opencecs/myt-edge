@@ -17,7 +17,7 @@ Both boards provide a 2.5GbE LAN port and two 10GbE optical ports. See the [plat
 | --- | --- |
 | [Build guide](docs/DUAL-BOARD-BUILD.md) | Inputs, source assembly and release builds for Y4 and Y12 |
 | [Development guide](docs/DEVELOPMENT-HANDOFF.md) | Where to make changes and how to validate them |
-| [Fastboot and OTA guide](docs/BUILD-AND-FLASH-GUIDE.md) | Package verification, installation, and system updates |
+| [Fastboot and OTA guide](docs/BUILD-AND-FLASH-GUIDE.md) | Package verification, data-preserving reinstall, optional quick erase, and system updates |
 | [Board differences](docs/Y4-Y12-DIFFERENCES.md) and [board API](docs/board-api.md) | Board selection, slot mapping and management interfaces |
 | [Release requirements](RELEASES.md) | Versioning, checksums and release validation records |
 

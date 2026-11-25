@@ -1,6 +1,9 @@
 param([string]$SerialNumber, [switch]$VerifyOnly, [ValidateNotNullOrEmpty()][string]$ExtractSpiBootstrap,
-      [ValidateSet(0,512,4096)][int]$SectorBytes = 0)
+      [ValidateSet(0,512,4096)][int]$SectorBytes = 0, [switch]$QuickErase)
 $ErrorActionPreference = 'Stop'
+if ($QuickErase -and ($VerifyOnly -or $ExtractSpiBootstrap)) {
+    throw 'Use -QuickErase only with -SerialNumber to install Debian.'
+}
 $packageDirectory = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $packageDirectory
 $checksums = @{}
@@ -47,7 +50,7 @@ if ($manifest.format -ceq 'y4-flash-v2') {
     }
 }
 if ($VerifyOnly) { Write-Host 'Package hashes verified; no device accessed.'; exit 0 }
-if (-not $SerialNumber) { throw 'Use -SerialNumber SERIAL. This writes the GPT, boot and both root slots; no erase step belongs to flashing.' }
+if (-not $SerialNumber) { throw 'Use -SerialNumber SERIAL. This writes the GPT, boot and both root slots. Add -QuickErase only to clear the system NVMe before reinstalling.' }
 if ($SerialNumber -notmatch '^[A-Za-z0-9._-]+$') { throw 'Invalid target serial' }
 $fb = Join-Path $PSScriptRoot 'fastboot.exe'
 $log = Join-Path $packageDirectory ('logs/flash-' + [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ') + '-' + $PID)
@@ -78,7 +81,7 @@ $hardware = $manifest.hardware
 if ($null -eq $hardware) { $hardware = "Y4-6187" }
 if ($hardware -cnotin @("Y4-6187", "Y12-6187")) { throw "Unsupported package target hardware" }
 $target = ($hardware -split "-")[0]
-if ($manifest.board_check -eq $true -or $target -ceq 'Y12') {
+if ($QuickErase -or $manifest.board_check -eq $true -or $target -ceq 'Y12') {
     $board = Invoke-Fastboot -Stage 'board' -Arguments @('-s', $SerialNumber, 'getvar', 'debian-board')
     Test-Y4Ready $board 'debian-board' $target
 }
@@ -89,7 +92,24 @@ $layout = Get-Y4Geometry $version $disk $imageBytes $SectorBytes
 [IO.File]::WriteAllText((Join-Path $log 'layout.json'), ($layout | ConvertTo-Json))
 if ($layout.sector_bytes -eq 512) { $gpt = 'images/gpt-512.img'; $boot = 'images/boot-512.img' }
 else { $gpt = 'images/gpt-4096.img'; $boot = 'images/boot-4096.img' }
-Write-Host 'Writing the GPT, boot and both root slots; the data partition is left untouched.'
+if ($QuickErase) {
+    if ($layout.disk_bytes -lt $layout.data_start_bytes + 2MB) { throw 'System NVMe is too small for quick erase.' }
+    $sector = $layout.sector_bytes
+    $gptFile = Get-Item -LiteralPath $gpt
+    if ($gptFile.Length -ne 3 * $sector + 32768) { throw 'Invalid packed GPT template size.' }
+    $gptBytes = [IO.File]::ReadAllBytes($gptFile.FullName)
+    if ([Text.Encoding]::ASCII.GetString($gptBytes, $sector, 8) -cne 'EFI PART') { throw 'Invalid packed GPT header.' }
+    $templateLastLba = [BitConverter]::ToUInt64($gptBytes, $sector + 32)
+    if ($templateLastLba -le 1) { throw 'Invalid packed GPT backup LBA.' }
+    if ($templateLastLba -gt $layout.last_lba) { throw 'System NVMe is smaller than the packed GPT template.' }
+    $quickEraseVersion = Invoke-Fastboot -Stage 'quick-erase-version' -Arguments @('-s', $SerialNumber, 'getvar', 'debian-quick-erase-version')
+    Test-Y4Ready $quickEraseVersion 'debian-quick-erase-version' '1'
+    Write-Host 'Quick erase clears the system NVMe partition table and filesystem headers, including /data.'
+    $null = Invoke-Fastboot -Stage 'quick-erase' -Arguments @('-s', $SerialNumber, 'erase', 'debian-system-quick')
+    Write-Host 'Quick erase verified. Writing the GPT, boot and both root slots.'
+} else {
+    Write-Host 'Writing the GPT, boot and both root slots; the data partition is left untouched.'
+}
 $null = Invoke-Fastboot -Stage 'gpt' -Arguments @('-s', $SerialNumber, '-S', '64M', 'flash', 'gpt', $gpt)
 $gptReady = Invoke-Fastboot -Stage 'gpt-ready' -Arguments @('-s', $SerialNumber, 'getvar', 'debian-gpt-ready')
 Test-Y4Ready $gptReady 'debian-gpt-ready' 'yes'

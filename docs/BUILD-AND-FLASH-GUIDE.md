@@ -9,7 +9,7 @@ Choose the release for the physical board, `Y4` or `Y12`. Check its version, boa
 
 ## Full Fastboot package
 
-The full ZIP contains `images/myt-spi.bin`, the system image, boot and GPT images for 512- and 4096-byte sectors, host flash scripts and checksums. Back up the system disk before reflashing. A reinstall writes the GPT, boot partition and both system slots. The script leaves the data-partition payload untouched. Preserving access to existing data requires a compatible partition layout and filesystem.
+The full ZIP contains `images/myt-spi.bin`, the system image, boot and GPT images for 512- and 4096-byte sectors, host flash scripts and checksums. Back up the system disk before reflashing. A standard reinstall writes the GPT, boot partition and both system slots while preserving the data-partition payload. Preserving access to existing data requires a compatible partition layout and filesystem.
 
 ### Verify the package and select the device
 
@@ -59,6 +59,47 @@ Flash.cmd -SerialNumber SERIAL && .\tools\fastboot.exe -s SERIAL reboot
 ```
 
 Run the reboot command after the script reports success. The scripts verify the selected device and disk geometry before writing. If they stop, keep the files under the extracted package’s `logs/` directory and correct the reported problem before retrying. First boot provisions or mounts `/data`, expands the active root filesystem and runs the board initialization service.
+
+### Quick erase and fresh data
+
+Quick erase removes the selected system NVMe partition table and clears the boot, system-slot and `/data` filesystem headers before reinstalling. Back up any data you need first. A standard install preserves an existing data partition with a compatible layout and filesystem.
+
+Confirm the board and serial as above. Query the active Fastboot receiver before choosing quick erase.
+
+```sh
+fastboot -s SERIAL getvar debian-quick-erase-version
+```
+
+The value must be `1`. If an older receiver does not support this query, use matching SPI firmware that provides quick erase, reboot, re-enter Fastboot and check the capability again.
+
+Choose one of the following ways to erase and install.
+
+- On Windows, run `Flash.cmd -SerialNumber SERIAL -QuickErase` from Command Prompt.
+- On Linux, run `sh Flash.sh SERIAL auto --quick-erase`.
+- To erase separately, run `fastboot -s SERIAL erase debian-system-quick`. After it succeeds, use the standard install command above without the quick-erase flag.
+
+The opt-in install flag runs the same native erase command before writing the new GPT, boot partition and both system slots. After installation, first boot creates a fresh `/data` filesystem. The quick erase clears and verifies only the first and last 1 MiB of the disk and the first 1 MiB of each of the boot, slot A, slot B and data partitions. Other sectors retain their contents, so this is not a secure erase.
+
+The native erase step took 0.016 s on a physical Y4 with a 1 TB NVMe drive and 512-byte sectors. This measures erase only, excluding installation and first boot. Y12 was verified offline.
+
+### Reset only the data partition from Debian
+
+Use this procedure when Debian is already running and only `/data` needs to be reset. It deletes the persistent user files, container data and application state on that partition. Back up the data first. As root, check the mounted device and filesystem type.
+
+```sh
+findmnt -n -o SOURCE,FSTYPE,TARGET --mountpoint /data
+```
+
+On the intended device, remove the initialization stamp and reboot. The early boot service recreates the data filesystem before applications start.
+
+```sh
+mountpoint -q /data &&
+rm -- /data/.y4-data-stamp &&
+sync -f /data &&
+systemctl reboot
+```
+
+After boot, run `journalctl -b -u y4-data-provision.service --no-pager` and `findmnt --mountpoint /data` to confirm the fresh filesystem and mount.
 
 ## System OTA
 

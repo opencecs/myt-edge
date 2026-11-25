@@ -52,6 +52,14 @@ class DeliveryTests(unittest.TestCase):
                 self.assertEqual(set(delivery.verify_full_delivery(self.package, result)), delivery.FULL_FILES)
                 with zipfile.ZipFile(result['archive']['path']) as archive:
                     self.assertEqual(archive.read(delivery.BUNDLE_IMAGE), self.spi.read_bytes())
+                    readme = archive.read("README.txt").decode("utf-8")
+                    for instruction in (
+                        "getvar debian-quick-erase-version",
+                        "erase debian-system-quick",
+                        "Flash.cmd -SerialNumber SERIAL -QuickErase",
+                        "sh Flash.sh SERIAL auto --quick-erase",
+                    ):
+                        self.assertIn(instruction, readme)
 
     def test_invalid_input_stops_before_staging(self):
         self.select('Y4')

@@ -145,7 +145,7 @@ def root_image_bytes(path):
     return size
 
 
-def geometry(version_output, disk_output, image, expected_sector='auto'):
+def geometry(version_output, disk_output, image, expected_sector='auto', *, quick_erase=False):
     if variable(version_output, 'debian-flash-version') != '3':
         raise ValueError('This package requires its source-built Debian UEFI flash protocol 3; update UEFI first')
     info = variable(disk_output, 'debian-disk-info')
@@ -165,6 +165,8 @@ def geometry(version_output, disk_output, image, expected_sector='auto'):
         raise ValueError('Slot image does not fit the fixed 16 GiB slot partition')
     if capacity < data_start_bytes + MIB:
         raise ValueError('System NVMe is smaller than the complete Debian layout')
+    if quick_erase and capacity < data_start_bytes + 2 * MIB:
+        raise ValueError('System NVMe is too small for quick erase')
     usable_last = last - 16384//sector - 1
     data_end = ((usable_last+1)*sector//MIB)*MIB
     data_bytes = data_end - data_start_bytes
@@ -176,6 +178,20 @@ def geometry(version_output, disk_output, image, expected_sector='auto'):
                 expected_data_bytes=data_bytes, slot_a_start_bytes=slot_a_start,
                 data_start_bytes=data_start_bytes,
                 capacity_source='UEFI system NVMe Block I/O')
+
+
+def verify_quick_erase_gpt(path, sector, last_lba):
+    # Packed GPT: MBR, primary header/table, backup table/header.
+    if path.stat().st_size != 3 * sector + 32768:
+        raise ValueError('Invalid packed GPT template size')
+    with path.open('rb') as stream:
+        stream.seek(sector)
+        header = stream.read(40)
+    if len(header) != 40 or not header.startswith(b'EFI PART'):
+        raise ValueError('Invalid packed GPT primary header')
+    backup_lba = struct.unpack_from('<Q', header, 32)[0]
+    if backup_lba <= 1 or backup_lba > last_lba:
+        raise ValueError('Packed GPT template does not fit the system NVMe')
 
 
 def verify_partition(output, name, expected):
@@ -204,13 +220,15 @@ def main():
     serial.add_argument('--expected', required=True)
     ready = sub.add_parser('ready')
     ready.add_argument('--log', type=Path, required=True)
-    ready.add_argument('--name', choices=['debian-clean-ready', 'debian-gpt-ready'], required=True)
-    ready.add_argument('--expected', choices=['yes', 'no'], default='yes')
+    ready.add_argument('--name', choices=['debian-clean-ready', 'debian-gpt-ready',
+                                          'debian-quick-erase-version'], required=True)
+    ready.add_argument('--expected', choices=['yes', 'no', '1'], default='yes')
     prepare = sub.add_parser('prepare')
     prepare.add_argument('--version-log', type=Path, required=True)
     prepare.add_argument('--disk-log', type=Path, required=True)
     prepare.add_argument('--image', type=Path, required=True)
     prepare.add_argument('--sector', choices=['auto', '512', '4096'], default='auto')
+    prepare.add_argument('--quick-erase', action='store_true')
     prepare.add_argument('--output', type=Path, required=True)
     verify = sub.add_parser('verify')
     verify.add_argument('--layout', type=Path, required=True)
@@ -240,7 +258,11 @@ def main():
     elif args.command == 'ready':
         verify_ready(args.log.read_text(), args.name, args.expected)
     elif args.command == 'prepare':
-        value = geometry(args.version_log.read_text(), args.disk_log.read_text(), args.image, args.sector)
+        value = geometry(args.version_log.read_text(), args.disk_log.read_text(), args.image,
+                         args.sector, quick_erase=args.quick_erase)
+        if args.quick_erase:
+            sector = value['sector_bytes']
+            verify_quick_erase_gpt(args.image.with_name(f'gpt-{sector}.img'), sector, value['last_lba'])
         args.output.write_text(json.dumps(value, indent=2) + '\n')
         print(value['sector_bytes'])
     else:

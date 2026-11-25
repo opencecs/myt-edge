@@ -1,11 +1,9 @@
 #!/bin/sh
 # Explicit invocation only; package verification never accesses a device.
 # Protocol 3: flashing writes the GPT and the boot/slot-a/slot-b partitions.
-# The data partition is provisioned by the installed system on first boot and
-# is never written here, so reinstalls keep user data. Stale-signature
-# cleanup happens on first boot inside the installed system, so no erase step
-# belongs to this flow. erase:debian-system remains a manual UEFI maintenance
-# command, not part of this flow.
+# The data partition is preserved by default. The quick erase option clears
+# filesystem headers on the system NVMe, including /data, before installing.
+# Stale-signature cleanup and data provisioning run on first boot.
 set -eu
 cd -- "$(dirname -- "$0")"
 if [ "${1:-}" = '--extract-spi-bootstrap' ]; then
@@ -15,17 +13,32 @@ if [ "${1:-}" = '--extract-spi-bootstrap' ]; then
   fi
   exec python3 ./tools/flash_contract.py package --directory . --extract-spi-bootstrap="$2"
 fi
-if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
-  echo 'Usage: ./Flash.sh SERIAL [auto|512|4096]' >&2
+usage() {
+  echo 'Usage: ./Flash.sh SERIAL [auto|512|4096] [--quick-erase]' >&2
   echo '       ./Flash.sh --extract-spi-bootstrap NEW_FILE (offline, for a legacy receiver)' >&2
   echo 'Installs Debian by writing the GPT and the boot/slot-a/slot-b partitions.' >&2
-  echo 'The data partition is left untouched for first-boot provisioning.' >&2
+  echo 'The data partition is preserved by default. --quick-erase clears it on the system NVMe.' >&2
   exit 2
-fi
+}
+[ "$#" -ge 1 ] && [ "$#" -le 3 ] || usage
 serial=$1
 case "$serial" in ''|*[!A-Za-z0-9._-]*) echo 'Invalid target serial' >&2; exit 2;; esac
-sector=${2:-auto}
+shift
+sector=auto
+if [ "$#" -gt 0 ] && [ "$1" != '--quick-erase' ]; then
+  sector=${1:-auto}
+  shift
+fi
 case "$sector" in auto|512|4096) ;; *) echo 'Invalid sector constraint' >&2; exit 2;; esac
+quick_erase=false
+if [ "${1:-}" = '--quick-erase' ]; then
+  quick_erase=true
+  shift
+fi
+[ "$#" -eq 0 ] || usage
+if [ "$quick_erase" = true ]; then
+  set -- --quick-erase
+fi
 command -v python3 >/dev/null
 command -v fastboot >/dev/null
 python3 ./tools/flash_contract.py package --directory .
@@ -42,18 +55,27 @@ invoke() {
 invoke serial getvar serialno
 python3 ./tools/flash_contract.py serial --log "$log/serial.log" --expected "$serial"
 target=$(python3 ./tools/flash_contract.py target --manifest tools/package.json)
-if [ "$target" != legacy ]; then
+if [ "$quick_erase" = true ] || [ "$target" != legacy ]; then
   invoke board getvar debian-board
   python3 ./tools/flash_contract.py board --manifest tools/package.json --log "$log/board.log"
 fi
 invoke protocol getvar debian-flash-version
 invoke disk getvar debian-disk-info
 detected=$(python3 ./tools/flash_contract.py prepare --version-log "$log/protocol.log" --disk-log "$log/disk.log" \
-  --image images/rootfs.img --sector "$sector" --output "$log/layout.json")
+  --image images/rootfs.img --sector "$sector" --output "$log/layout.json" "$@")
 case "$detected" in 512) gpt=images/gpt-512.img; boot=images/boot-512.img;;
   4096) gpt=images/gpt-4096.img; boot=images/boot-4096.img;;
   *) echo 'Unsupported system NVMe geometry' >&2; exit 1;; esac
-echo 'Writing the GPT and the boot/slot-a/slot-b partitions; data is provisioned on first boot.'
+if [ "$quick_erase" = true ]; then
+  invoke quick-erase-version getvar debian-quick-erase-version
+  python3 ./tools/flash_contract.py ready --log "$log/quick-erase-version.log" \
+    --name debian-quick-erase-version --expected 1
+  echo 'Quick erase clears the partition table and filesystem headers on the system NVMe, including /data.'
+  invoke quick-erase erase debian-system-quick
+  echo 'Quick erase verified. Writing the GPT, boot and both root slots.'
+else
+  echo 'Writing the GPT and the boot/slot-a/slot-b partitions; data is provisioned on first boot.'
+fi
 invoke gpt -S 64M flash gpt "$gpt"
 invoke gpt-ready getvar debian-gpt-ready
 python3 ./tools/flash_contract.py ready --log "$log/gpt-ready.log" --name debian-gpt-ready

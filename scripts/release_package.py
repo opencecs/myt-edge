@@ -128,7 +128,22 @@ SERIAL 替换为 fastboot devices 显示的目标序列号。
 4. 成功后执行 fastboot -s SERIAL reboot，等待首次初始化完成。
 
 脚本适配 512/4096 字节扇区，重写 GPT、boot 和两个系统槽。
-data 保留要求原盘采用兼容布局和文件系统；迁移其他布局必须先备份。
+默认保留兼容布局和文件系统的 data 分区。迁移不兼容的布局前须备份。
+
+可选快速擦除会清空系统 NVMe 的分区表和文件系统头，原系统及 /data 都会丢失。先备份所需数据，
+再执行 fastboot -s SERIAL getvar debian-quick-erase-version，确认返回 1。
+旧接收端不支持时，先更新至同板型、支持快速擦除的 SPI 固件，再进入 Fastboot 复查。
+
+在第 3 步选择以下一种方式：
+   Windows：Flash.cmd -SerialNumber SERIAL -QuickErase
+   Linux：sh Flash.sh SERIAL auto --quick-erase
+   或先运行 fastboot -s SERIAL erase debian-system-quick，成功后按第 3 步原命令安装。
+
+快速擦除清零并回读校验磁盘头尾各 1 MiB，以及 boot、slot-a、slot-b、data
+各分区起点的 1 MiB。安装成功后首次开机创建新的 /data 文件系统。
+其他扇区保留原内容，因此此功能不属于安全擦除。
+一台使用 1 TB NVMe（512 字节扇区）的 Y4 实机快速擦除耗时 0.016 秒，
+仅统计擦除步骤。Y12 已通过离线验证。
 DDR、CSU PM 配置及 UEFI（BL33）通过 USB Fastboot 更新。系统 OTA 仅升级系统和配套内核。原始全闪存镜像仅供构建校验。
 此 UEFI 在未熔写设备上会自动执行不可逆 OEM eFuse 熔写并关机；须先取得设备所有者确认。
 MCU 固件已随系统内置，由现有初始化流程处理，无需另刷文件。
