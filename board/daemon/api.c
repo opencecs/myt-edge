@@ -92,6 +92,7 @@ static struct y4_resource_sampler resource_sampler;
 static struct event_value event_values[EVENT_TOPIC_COUNT];
 static uint64_t resource_next,event_next,telemetry_sampled_ms,mcu_event_started_ms,ota_phase_generation;
 static int telemetry_fresh,fan_event_dirty,ota_event_phase=-1;
+static unsigned y12_fan_fresh_mask;
 static char mcu_event_phase[sizeof job.phase];
 static void stop(int sig){(void)sig;y4_board_stopping=1;}
 static int valid_hex(const char *s,size_t n) {
@@ -349,6 +350,12 @@ static void refresh_events(uint64_t now) {
   fan_event_dirty=1;
   telemetry_sampled_ms=sample.sampled_ms;
   telemetry_fresh=fresh;
+ }
+ if(periodic&&!strcmp(Y4_DEVICE_ID,"Y12")) {
+  /* PWM readback can outlive the monitor sample, especially after a write. */
+  unsigned mask=y12_board_fans_fresh_mask(&sample,now);
+  if(mask!=y12_fan_fresh_mask)fan_event_dirty=1;
+  y12_fan_fresh_mask=mask;
  }
  if(fan_event_dirty) {
   int n=y4_board_fans_json(&sample,json,sizeof json);

@@ -80,6 +80,7 @@ int y4_board_version_json(const struct y4_board_sample *,char *,size_t);
 int y12_board_set_fan(unsigned group,unsigned percent,struct y4_board_sample *);
 void y12_board_fans_sample(struct y4_board_sample *);
 void y12_board_fans_preserve_readback(const struct y4_board_sample *,struct y4_board_sample *);
+unsigned y12_board_fans_fresh_mask(const struct y4_board_sample *,uint64_t now);
 int y12_board_power_json(const struct y4_board_sample *,char *,size_t);
 int y4_board_fans_json(const struct y4_board_sample *,char *,size_t);
 int y4_board_temperature_json(const struct y4_board_sample *,char *,size_t);

@@ -62,13 +62,13 @@ int y4_board_sample_json(const struct y4_board_sample *s,char *out,size_t cap) {
  {
   static char inner[2048];static int have;static int once;static int ilen;
   if(!once){once=1;FILE*f=fopen("/etc/y4-release.json","rb");
-   if(f){char raw[2048];size_t n=fread(raw,1,sizeof raw-1,f);fclose(f);
+   if(f){char raw[2048];size_t n=fread(raw,1,sizeof raw-1,f);fclose(f);raw[n]=0;
     if(n&&raw[0]=='{'){char*close=strrchr(raw,'}');
      if(close){int m=(int)(close-raw-1);if(m>(int)sizeof inner-1)m=(int)sizeof inner-1;
       memcpy(inner,raw+1,(size_t)m);inner[m]=0;ilen=m;have=1;}}}}
   struct utsname un={0};char running[128]={0};
   if(uname(&un)==0)(void)snprintf(running,sizeof running,"%s",un.release);
-  if(have)put(&t,"\"versions\":{%.*s,\"kernel_running\":\"%s\"},",ilen,inner,running);
+  if(have&&inner[strspn(inner," \t\r\n")])put(&t,"\"versions\":{%.*s,\"kernel_running\":\"%s\"},",ilen,inner,running);
   else put(&t,"\"versions\":{\"kernel_running\":\"%s\"},",running);
  }
  put(&t,"\"mcu\":{\"status\":%d,\"firmware\":\"%s\",\"uid_valid\":%s,\"uid\":\"%s\",\"fan_status\":%d,\"fault_bits\":%u},",
@@ -253,11 +253,28 @@ static int y12_fan_fresh(uint64_t now, uint64_t sampled)
  return sampled && now >= sampled && now - sampled < 5000u;
 }
 
+enum {
+ Y12_FAN_TACH_FRESH = 1u << 0,
+ Y12_FAN_PWM0_FRESH = 1u << 1,
+};
+
+unsigned y12_board_fans_fresh_mask(const struct y4_board_sample *s, uint64_t now)
+{
+ const struct y12_board_fan_sample *fans = &s->y12_fans;
+ unsigned mask = s->magic == Y4_BOARD_SAMPLE_MAGIC && y12_fan_fresh(now, fans->sampled_ms)
+               ? Y12_FAN_TACH_FRESH : 0u;
+ for (unsigned i = 0; i < 2; i++)
+  if (y12_fan_fresh(now, fans->pwm_sampled_ms[i]))
+   mask |= Y12_FAN_PWM0_FRESH << i;
+ return mask;
+}
+
 static int y12_fans_json(const struct y4_board_sample *s, char *out, size_t cap)
 {
  const struct y12_board_fan_sample *fans = &s->y12_fans;
  uint64_t now = y4_board_now_ms(), sampled = fans->sampled_ms;
- int fresh = s->magic == Y4_BOARD_SAMPLE_MAGIC && y12_fan_fresh(now, sampled);
+ unsigned fresh_mask = y12_board_fans_fresh_mask(s, now);
+ int fresh = !!(fresh_mask & Y12_FAN_TACH_FRESH);
  uint64_t age = sampled && now >= sampled ? now - sampled : 0;
  struct text t = {.data = out, .cap = cap};
  put(&t, "{\"schema\":1,\"device\":\"Y12\",\"default_percent\":20,"
@@ -268,7 +285,7 @@ static int y12_fans_json(const struct y4_board_sample *s, char *out, size_t cap)
   int pwm = fans->pwm_raw[i];
   put(&t, "%s{\"id\":\"%s\",\"pwm_sampled_ms\":%" PRIu64 ",\"pwm_raw\":",
       i ? "," : "", y12_fan_nodes[i], pwm_sampled);
-  if (y12_fan_fresh(now, pwm_sampled) && pwm >= 0 && pwm <= 255)
+  if ((fresh_mask & (Y12_FAN_PWM0_FRESH << i)) && pwm >= 0 && pwm <= 255)
    put(&t, "%d", pwm);
   else
    put(&t, "null");

@@ -37,7 +37,7 @@ static char release_inner[2048];static int release_have;
 static void release_load(void) {
  static int once;
  if(!once){once=1;FILE*f=fopen("/etc/y4-release.json","rb");
-  if(f){char raw[2048];size_t n=fread(raw,1,sizeof raw-1,f);fclose(f);
+  if(f){char raw[2048];size_t n=fread(raw,1,sizeof raw-1,f);fclose(f);raw[n]=0;
    if(n&&raw[0]=='{'){char*close=strrchr(raw,'}');
     if(close){int m=(int)(close-raw-1);if(m>(int)sizeof release_inner-1)m=(int)sizeof release_inner-1;
      memcpy(release_inner,raw+1,(size_t)m);release_inner[m]=0;release_have=1;}}}}
@@ -45,7 +45,7 @@ static void release_load(void) {
 static void release_embed(struct text *t,int *readable) {
  release_load();
  *readable=release_have;
- if(release_have)put(t,"%s,",release_inner);
+ if(release_have&&release_inner[strspn(release_inner," \t\r\n")])put(t,"%s,",release_inner);
 }
 static void release_string(const char *key,char *out,size_t cap) {
  char pattern[64];

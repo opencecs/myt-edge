@@ -195,20 +195,75 @@ def check_fan_change(root, path, stream, board):
     status, payload = get(path, "/api/v1/fans")
     assert status == 200 and fan_rpm(payload, board) == fan_rpm(event, board)
     if board == "Y12":
-        group = "pwm-fan-out2"
-
-        def pwm(sample):
-            return next(value["pwm_raw"] for value in sample["groups"] if value["id"] == group)
-
-        body = json.dumps({"group": group, "percent": 33}).encode()
-        request = f"POST /api/v1/fans HTTP/1.1\r\nHost: localhost\r\nContent-Length: {len(body)}\r\n\r\n"
-        with connect(path) as sock:
-            sock.sendall(request.encode() + body)
-            status, payload = read_reply(sock)
-        assert status == 200 and pwm(payload) == 84, (status, payload)
-        event = stream.matching("fan-status", lambda value: pwm(value) == 84)
-        assert pwm(get(path, "/api/v1/fans")[1]) == pwm(event)
+        set_y12_pwm(path, percent=33, expected_pwm=84)
+        event = stream.matching("fan-status", lambda value: y12_pwm(value) == 84)
+        assert y12_pwm(get(path, "/api/v1/fans")[1]) == y12_pwm(event)
         assert fan_input(root, board).with_name("pwm1").read_text().strip() == "84"
+
+
+def y12_pwm(sample):
+    return next(group["pwm_raw"] for group in sample["groups"] if group["id"] == "pwm-fan-out2")
+
+
+def set_y12_pwm(path, percent, expected_pwm):
+    body = json.dumps({"group": "pwm-fan-out2", "percent": percent}).encode()
+    request = f"POST /api/v1/fans HTTP/1.1\r\nHost: localhost\r\nContent-Length: {len(body)}\r\n\r\n"
+    with connect(path) as sock:
+        sock.sendall(request.encode() + body)
+        status, payload = read_reply(sock)
+    assert status == 200 and y12_pwm(payload) == expected_pwm, (status, payload)
+    return payload
+
+
+@contextmanager
+def suspend_fixture_children(root, daemon):
+    proc = Path("/proc") / str(daemon.pid)
+    assert (proc / "root").resolve(strict=True) == root
+    children = {
+        int(pid)
+        for task in (proc / "task").iterdir()
+        for pid in (task / "children").read_text().split()
+    }
+    assert children, "fixture monitor children missing"
+    frozen = []
+    try:
+        for pid in children:
+            fd = os.pidfd_open(pid)
+            try:
+                assert (Path("/proc") / str(pid) / "root").resolve(strict=True) == root
+                signal.pidfd_send_signal(fd, signal.SIGSTOP)
+            except BaseException:
+                os.close(fd)
+                raise
+            frozen.append(fd)
+        yield
+    finally:
+        for fd in frozen:
+            try:
+                signal.pidfd_send_signal(fd, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
+            finally:
+                os.close(fd)
+
+
+def check_y12_fan_pwm_expiry(root, path, daemon):
+    with event_stream(path) as stream:
+        stream.matching("fan-status", lambda sample: sample["fresh"] and y12_pwm(sample) == 84)
+        with suspend_fixture_children(root, daemon):
+            stale = stream.matching("fan-status", lambda sample: not sample["fresh"], timeout=10)
+            assert y12_pwm(stale) is None, stale
+
+            updated = set_y12_pwm(path, percent=37, expected_pwm=94)
+            assert updated["fresh"] is False, updated
+            event = stream.matching("fan-status", lambda sample: y12_pwm(sample) == 94)
+            assert event["fresh"] is False, event
+
+            expired = stream.matching("fan-status", lambda sample: y12_pwm(sample) is None, timeout=10)
+            status, current = get(path, "/api/v1/fans")
+            assert status == 200 and y12_pwm(current) is None, (status, current)
+            assert expired["fresh"] is False, expired
+    print("Y12: stale monitor still publishes PWM POST and subsequent PWM expiry")
 
 
 def check_idle_upgrade_events(stream):
@@ -283,7 +338,7 @@ def running_daemon(root, socket_path, log):
                     break
                 time.sleep(0.05)
             assert socket_path.is_socket(), "daemon did not create the fixture socket"
-            yield
+            yield daemon
         finally:
             if daemon.poll() is None:
                 os.killpg(daemon.pid, signal.SIGTERM)
@@ -450,6 +505,17 @@ def check_upload_cleanup(root, path, board, idle_upload):
     print(f"{board}: OTA overrun (coalesced and fragmented), disconnect{timeout}, staging removal and readmission passed")
 
 
+def check_release_metadata(path, firmware_version=None, manifest_readable=False):
+    status, version = get(path, VERSION)
+    assert status == 200 and version["schema"] == 1, (status, version)
+    assert version["consistency"]["manifest_readable"] is manifest_readable, version
+    assert version.get("firmware_version") == firmware_version, version
+    status, hardware = get(path, "/api/v1/hardware")
+    assert status == 200 and hardware["schema"] == 1, (status, hardware)
+    assert hardware["versions"].get("firmware_version") == firmware_version, hardware
+    assert hardware["versions"]["kernel_running"] == version["kernel_running"]
+
+
 def configure_fixture(root, board):
     for directory in ("data", "proc/device-tree", "proc/sys/kernel/random", "run", "var/lib"):
         (root / directory).mkdir(parents=True)
@@ -498,19 +564,33 @@ def main():
         log = Path(work) / "daemon.log"
         try:
             with ExitStack() as subscribers:
-                with running_daemon(root, path, log):
+                with running_daemon(root, path, log) as daemon:
                     exercise(root, path, args.board)
                     check_upload_cleanup(root, path, args.board, args.idle_upload)
                     if args.slow_reader:
                         check_slow_reader(path, args.board)
+                    if args.board == "Y12":
+                        check_y12_fan_pwm_expiry(root, path, daemon)
                     stream = subscribers.enter_context(event_stream(path))
                     stream.next_snapshot()
                 stream.expect_eof()
             with running_daemon(root, path, log):
+                check_release_metadata(path)
                 with event_stream(path) as stream:
                     renewed = check_initial_topics(stream, args.board)
                     assert renewed["memory"] == memory(262144, 50), renewed
             print(f"{args.board}: subscribers disconnected on daemon stop and resumed after restart")
+
+            release = root / "etc/y4-release.json"
+            release.parent.mkdir(exist_ok=True)
+            for manifest, version in (
+                    ("{}", None),
+                    ("{ \t\r\n }", None),
+                    ('{"firmware_version": "20261126-r1000"}', "20261126-r1000")):
+                release.write_text(manifest, encoding="ascii")
+                with running_daemon(root, path, log):
+                    check_release_metadata(path, firmware_version=version, manifest_readable=True)
+            print(f"{args.board}: version and hardware JSON valid with missing, empty, and populated manifests")
         except BaseException:
             print(log.read_text(encoding="utf-8", errors="replace")[-4096:], file=sys.stderr)
             raise
