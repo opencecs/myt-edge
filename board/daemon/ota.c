@@ -684,12 +684,13 @@ static int step_version(void) {
 }
 
 static int step_slot(void) {
-  char disk[64];
-  int running = 0;
-  int e = running_partition(disk, sizeof disk, &running);
+  /* Recheck after the upload and signature verification, before opening
+   * the inactive partition for writes. */
+  int e = y4_board_ota_slot_ready();
   if (e) return e;
-  if (running != 2 && running != 3) return -EINVAL;
-  ota.target_index = running == 2 ? 3 : 2;
+  int running = y4_board_running_slot();
+  if (running < 0) return running;
+  ota.target_index = running == 0 ? 3 : 2;
   (void)snprintf(ota.slot, sizeof ota.slot, "%s", ota.target_index == 2 ? "A" : "B");
   return 0;
 }

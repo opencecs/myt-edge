@@ -82,6 +82,8 @@ static void running_slot(struct text *t,char *slot) {
  if(slot[0])put(t,"\"slot\":\"%s\"",slot);else put(t,"\"slot\":null");
 }
 
+static int ota_slot_ready(const struct y4_slot_state *state);
+
 int y4_board_version_json(const struct y4_board_sample *s,char *out,size_t cap) {
  if(!out||cap<512u)return -EINVAL;
  struct text t={out,cap,0,0};
@@ -140,7 +142,7 @@ int fresh=s&&s->magic==Y4_BOARD_SAMPLE_MAGIC&&!s->mcu_error;
  put(&t,"}},\"consistency\":{\"kernel_sync\":");
  put(&t,"%s",kernel_sync?boolean(1):boolean(0));
  put(&t,",\"slot_confirmed\":");
- if(!slot_error)put(&t,"%s",boolean(state.boot_ok));else put(&t,"null");
+ if(!slot_error)put(&t,"%s",boolean(!ota_slot_ready(&state)));else put(&t,"null");
  put(&t,",\"manifest_readable\":%s},\"slot_error\":",boolean(readable));
  put(&t,"%d}\n",slot_error);
  if(t.error)return t.error;
@@ -196,6 +198,29 @@ static int slot_read_confirmed(void) {
       y4_board_json_string(text, "slot", slot, sizeof slot) || slot[0] != 'A' + selected)
     return -EINVAL;
   return (int)selected;
+}
+
+/* The other slot is the rollback target until the running slot has both
+ * confirmation records. A failed confirmation can leave boot_ok set while
+ * confirmed.json still names the only known-good fallback. */
+static int ota_slot_ready(const struct y4_slot_state *state) {
+  int selected = selected_slot(state);
+  if (selected < 0) return selected;
+  int running = y4_board_running_slot();
+  if (running < 0) return running;
+  if (state->rollback_pending || selected != running ||
+      (!state->boot_ok && state->boot_count >= Y4_SLOT_TRY_LIMIT)) return -EBUSY;
+  if (!state->boot_ok) return -EAGAIN;
+  int confirmed = slot_read_confirmed();
+  if (confirmed == -ENOENT) return -EAGAIN;
+  if (confirmed < 0) return confirmed;
+  return confirmed == running ? 0 : -EAGAIN;
+}
+
+int y4_board_ota_slot_ready(void) {
+  struct y4_slot_state state;
+  int e = y4_grubenv_read(Y4_GRUBENV_DEFAULT, &state);
+  return e ? e : ota_slot_ready(&state);
 }
 
 int y4_board_slot_pending_reboot(void) {

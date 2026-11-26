@@ -27,7 +27,7 @@ static const char *const boot_ids[]={
 };
 static unsigned boot, writes, reboots, gc, receipt_attempts;
 static int running, ota_busy, backup_missing, primary_missing;
-static int reboot_error, receipt_error;
+static int reboot_error, receipt_error, receipt_read_error;
 static uint64_t now=1000;
 static char receipt[256];
 static char primary[512], backup[512], missing[512];
@@ -54,6 +54,7 @@ int __wrap_y4_board_read_file(const char *path, char *out, size_t cap, size_t *b
     n=snprintf(out,cap,"%s\n",boot_ids[boot]);
   } else {
     assert(!strcmp(path,"/data/y4-board/confirmed.json"));
+    if(receipt_read_error) return receipt_read_error;
     if(!receipt[0]) return -ENOENT;
     n=snprintf(out,cap,"%s",receipt);
   }
@@ -107,15 +108,18 @@ int main(int argc,char **argv) {
   select_slot(0,1);
   assert(y4_board_slot_boot_count(0)==0 && !writes);
   assert(y4_board_ota_confirm()==0 && strstr(receipt,"\"slot\":\"A\""));
+  assert(y4_board_ota_slot_ready()==0);
 
   select_slot(1,0);
   assert(y4_board_slot_pending_reboot()==1);
   assert(y4_board_ota_confirm()==-EAGAIN);
+  assert(y4_board_ota_slot_ready()==-EBUSY);
   assert(y4_board_slot_boot_count(0)==0 && !writes);
   check_count(0);
 
   running=1;
   assert(y4_board_slot_pending_reboot()==0);
+  assert(y4_board_ota_slot_ready()==-EAGAIN);
   ota_busy=1;
   assert(y4_board_ota_confirm()==-EBUSY);
   assert(y4_board_slot_boot_count(1)==-EAGAIN && !writes);
@@ -142,6 +146,7 @@ int main(int argc,char **argv) {
   assert(y4_board_slot_boot_count(0)==-EAGAIN && writes==3 && !reboots);
   check_count(3);
   assert(y4_board_slot_pending_reboot()==1);
+  assert(y4_board_ota_slot_ready()==-EBUSY);
 
   primary_missing=1;
   assert(y4_board_slot_boot_count(1)==-ENOENT && !reboots && writes==3);
@@ -153,6 +158,7 @@ int main(int argc,char **argv) {
   assert(rollback.boot_ok && rollback.rollback_pending && !rollback.boot_count);
   assert(rollback.slot[0]=='A' && !strcmp(rollback.boot_count_id,boot_ids[boot]));
   assert(y4_board_slot_pending_reboot()==1 && y4_board_ota_confirm()==-EAGAIN);
+  assert(y4_board_ota_slot_ready()==-EBUSY);
   assert(y4_board_slot_boot_count(0)==-EAGAIN && reboots==1 && writes==4);
   reboot_error=0;
   assert(y4_board_slot_boot_count(1)==0 && reboots==2 && writes==4);
@@ -162,6 +168,7 @@ int main(int argc,char **argv) {
   assert(y4_board_slot_pending_reboot()==0);
   assert(y4_board_slot_boot_count(0)==0 && writes==5);
   assert(!read_primary().rollback_pending);
+  assert(y4_board_ota_slot_ready()==0);
 
   select_slot(1,0);
   struct y4_board_sample health={.magic=Y4_BOARD_SAMPLE_MAGIC,.sampled_ms=1000};
@@ -179,15 +186,29 @@ int main(int argc,char **argv) {
   assert(y4_board_slot_confirm_tick(&health)==-ENOSPC && writes==6);
   assert(read_primary().boot_ok && gc==1);
   assert(strstr(receipt,"\"slot\":\"A\""));
+  assert(y4_board_ota_slot_ready()==-EAGAIN);
   receipt_error=0;
   assert(y4_board_slot_confirm_tick(&health)==0 && receipt_attempts==2);
   now+=1000;
   assert(y4_board_slot_confirm_tick(&health)==0 && writes==6 && receipt_attempts==3);
   assert(gc==2 && strstr(receipt,"\"slot\":\"B\""));
+  assert(y4_board_ota_slot_ready()==0);
   now+=1000;
   assert(y4_board_slot_confirm_tick(&health)==0 && receipt_attempts==3);
   assert(y4_board_ota_confirm()==0 && writes==6 && receipt_attempts==4 && gc==3);
-  puts("A/B cases passed: roots, confirmation, write failures, boot IDs, and orderly rollback");
+  running=0;
+  assert(y4_board_ota_slot_ready()==-EBUSY);
+  running=-ENODEV;
+  assert(y4_board_ota_slot_ready()==-ENODEV);
+  running=1;
+
+  receipt[0]=0;
+  assert(y4_board_ota_slot_ready()==-EAGAIN);
+  strcpy(receipt,"{\"schema\":1,\"default\":1,\"slot\":\"A\"}");
+  assert(y4_board_ota_slot_ready()==-EINVAL);
+  receipt_read_error=-EIO;
+  assert(y4_board_ota_slot_ready()==-EIO);
+  puts("A/B cases passed: OTA readiness, confirmation, write failures, boot IDs, and orderly rollback");
   return 0;
 }
 """

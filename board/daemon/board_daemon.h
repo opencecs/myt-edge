@@ -86,6 +86,7 @@ int y4_board_fans_json(const struct y4_board_sample *,char *,size_t);
 int y4_board_temperature_json(const struct y4_board_sample *,char *,size_t);
 int y4_board_running_slot(void);
 int y4_board_slot_pending_reboot(void);
+int y4_board_ota_slot_ready(void);
 int y4_board_slot_boot_count(int allow_rollback);
 int y4_board_request_reboot(void);
 int y4_board_ota_busy(void);

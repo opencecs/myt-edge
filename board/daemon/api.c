@@ -813,8 +813,11 @@ static void route(struct client*c,char*header) {
   if(!strcmp(Y4_DEVICE_ID,"Y4")&&mcu_update_busy()){
    error_response(c,409,-EBUSY,"mcu_update_busy");return;
   }
-  if(check_pending_slot(c))return;
-  int e=y4_board_ota_admit(length);
+  int e=y4_board_ota_slot_ready();
+  if(e==-EBUSY){error_response(c,409,e,"slot_reboot_pending");return;}
+  if(e==-EAGAIN){error_response(c,409,e,"slot_unconfirmed");return;}
+  if(e){error_response(c,503,e,"slot_state_unavailable");return;}
+  e=y4_board_ota_admit(length);
   if(e){error_response(c,e==-EBUSY?409u:e==-ENOSPC?507u:e==-EFBIG?413u:503u,e,"ota_admission_failed");return;}
   uint64_t now=y4_board_now_ms();
   c->expected=length;c->parsed=1;c->ota=1;c->deadline=now+OTA_UPLOAD_TIME_MS;

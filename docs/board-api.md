@@ -311,7 +311,7 @@ data: {"schema":1,"device":"Y4","sampled_ms":124000,"cpu":null,"memory":null}
 | `slot.boot_kernel_a` / `boot_kernel_b` | **每槽绑定的内核目录**（boot FAT `/kernels/<交付版本>/`，OTA 实装后核心字段） |
 | `slot.running` | `{partuuid, slot}`：当前运行槽的 PARTUUID 与字母 |
 | `consistency.kernel_sync` | `kernel_running` == 镜像声明 `kernel`（内核与 rootfs 配对一致性） |
-| `consistency.slot_confirmed` | 同 `slot.boot_ok` |
+| `consistency.slot_confirmed` | 实际根槽与 GRUB 一致、`slot.boot_ok=true`，且共享确认记录指向该槽时为 true |
 | `consistency.manifest_readable` | /etc/y4-release.json 可读 |
 | `slot_error` | grubenv 读取错误码（0 正常；-2 格式错、-11 缺文件） |
 
@@ -408,6 +408,8 @@ V11 自 MCU 0.1.43 起只配置 FAN3–FAN5。MCU 先建立 25 kHz、20% PWM，�
 | 并发 | 同一时刻仅一个 OTA 任务。Y4 的 MCU 上传、运行、取消处理中或写入结果待确认时，返回 409 `mcu_update_busy` |
 | 首启门 | 首启初始化未完成（initialization.completed=false）时 503 |
 | 成功 | `202` + 状态 JSON；之后轮询 `GET /api/v1/update/status` |
+
+接收 OTA 前会同时检查实际运行槽、GRUB 的启动确认和 `/data/y4-board/confirmed.json`，并在验签后、打开非活动槽写入前再次检查。运行槽尚未完成确认时返回 409 `slot_unconfirmed`。待重启切槽或回滚时返回 409 `slot_reboot_pending`。槽位状态损坏或不可读取时返回 503 `slot_state_unavailable`。
 
 正式发布使用 schema 2。Y12 仅接受对应板型的 schema 2。仍使用旧版单内核布局的设备会在清单校验阶段拒绝 schema 2，需先通过 [Fastboot 完整包](BUILD-AND-FLASH-GUIDE.md#full-fastboot-package)迁移到双槽内核布局。
 
