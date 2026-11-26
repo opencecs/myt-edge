@@ -314,6 +314,7 @@ int y4_board_monitor_run(int channel) {
   if(net_status){s.network.error=net_status;s.network.default_egress=Y4_NET_EGRESS_NONE;
    for(unsigned i=0;i<2u;i++){s.network.logical[i].ipv4_valid=0;s.network.logical[i].ipv4[0]=0;}}
   if(!strcmp(Y4_DEVICE_ID,"Y12")) {
+   y12_board_fans_sample(&s);
    y12_read_presence(&s);
    s.slots_error=y12_slot_online(&s.y12_slot_online);
    y12_sync_slot_leds(&s);

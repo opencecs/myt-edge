@@ -7,6 +7,7 @@ lib/, usr/lib/ and usr/bin/qemu-aarch64-static. The test copies those
 runtime files into a temporary chroot and creates synthetic procfs data.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 import http.client
 import json
@@ -23,6 +24,9 @@ import time
 RESOURCES = "/api/v1/system/resources"
 EVENTS = "/api/v1/events"
 VERSION = "/api/v1/version"
+OTA = "/api/v1/update"
+BOOT_ID = "01234567-89ab-cdef-0123-456789abcdef"
+UPLOAD_LENGTH = 16  # shorter than even the OTA container header
 CPU_INITIAL = "cpu  100 20 30 600 30 0 0 0 12 2\n"
 # Delta 200 ticks, including 100 idle and 30 iowait. Guest columns overlap.
 CPU_NEXT = "cpu  135 25 50 700 60 5 5 0 31 4\n"
@@ -91,7 +95,7 @@ class Events:
         assert self.response.headers.get_content_type() == "text/event-stream"
         self.retry = None
 
-    def next_snapshot(self):
+    def next_event(self):
         fields = {}
         for _ in range(48):
             raw = self.response.readline(4096)
@@ -99,8 +103,8 @@ class Events:
             line = raw.decode("utf-8").rstrip("\r\n")
             if not line:
                 if "data" in fields:
-                    assert fields.get("event") == "system-resources", fields
-                    return json.loads(fields["data"])
+                    assert fields.get("event"), fields
+                    return fields["event"], json.loads(fields["data"])
                 fields.clear()
             elif not line.startswith(":"):
                 name, sep, value = line.partition(":")
@@ -108,7 +112,18 @@ class Events:
                     fields[name] = value.removeprefix(" ")
                     if name == "retry":
                         self.retry = int(fields[name])
-        raise AssertionError("event stream did not provide a complete snapshot")
+        raise AssertionError("event stream did not provide a complete event")
+
+    def matching(self, topic, predicate=lambda _: True, timeout=8):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            name, payload = self.next_event()
+            if name == topic and predicate(payload):
+                return payload
+        raise AssertionError(f"no matching event for {topic!r}")
+
+    def next_snapshot(self):
+        return self.matching("system-resources")
 
     def expect_eof(self):
         for _ in range(24):
@@ -128,6 +143,84 @@ def event_stream(path):
 def check_shape(sample, board):
     assert sample["schema"] == 1 and sample["device"] == board, sample
     assert type(sample["sampled_ms"]) is int and sample["sampled_ms"] >= 0, sample
+
+
+def initial_events(stream, board):
+    topics = {"system-resources", "fan-status", "temperature", "ota-status", "mcu-update"}
+    if board == "Y12":
+        topics.add("slot-power")
+    values = {}
+    for _ in range(18):
+        topic, payload = stream.next_event()
+        assert topic in topics, (board, topic)
+        assert payload["schema"] == 1, payload
+        values[topic] = payload
+        if values.keys() == topics:
+            return values
+    raise AssertionError(f"{board}: did not receive initial topics {topics - values.keys()}")
+
+
+def check_initial_topics(stream, board):
+    values = initial_events(stream, board)
+    check_shape(values["system-resources"], board)
+    assert values["ota-status"]["busy"] is False
+    assert values["mcu-update"]["running"] is False
+    assert values["fan-status"]["device"] == board
+    temps = values["temperature"]
+    assert temps["device"] == board and "CPU" in temps["temperatures"]
+    if board == "Y12":
+        power = values["slot-power"]
+        assert power["device"] == board
+        assert [slot["slot"] for slot in power["slots"]] == list(range(1, 13))
+    return values["system-resources"]
+
+
+def fan_input(root, board):
+    if board == "Y12":
+        return root / "sys/bus/platform/devices/pwm-fan-out2/hwmon/hwmon0/fan1_input"
+    return root / "sys/class/hwmon/hwmon0/fan1_input"
+
+
+def fan_rpm(payload, board):
+    if board == "Y12":
+        first = payload["fans"][0]
+        assert first["id"] == "FAN1"
+        return first["rpm"]
+    return payload["FAN1"]["rpm"] if payload["FAN1"]["valid"] else None
+
+
+def check_fan_change(root, path, stream, board):
+    replace_file(fan_input(root, board), "1234\n")
+    event = stream.matching("fan-status", lambda value: fan_rpm(value, board) == 1234)
+    status, payload = get(path, "/api/v1/fans")
+    assert status == 200 and fan_rpm(payload, board) == fan_rpm(event, board)
+    if board == "Y12":
+        group = "pwm-fan-out2"
+
+        def pwm(sample):
+            return next(value["pwm_raw"] for value in sample["groups"] if value["id"] == group)
+
+        body = json.dumps({"group": group, "percent": 33}).encode()
+        request = f"POST /api/v1/fans HTTP/1.1\r\nHost: localhost\r\nContent-Length: {len(body)}\r\n\r\n"
+        with connect(path) as sock:
+            sock.sendall(request.encode() + body)
+            status, payload = read_reply(sock)
+        assert status == 200 and pwm(payload) == 84, (status, payload)
+        event = stream.matching("fan-status", lambda value: pwm(value) == 84)
+        assert pwm(get(path, "/api/v1/fans")[1]) == pwm(event)
+        assert fan_input(root, board).with_name("pwm1").read_text().strip() == "84"
+
+
+def check_idle_upgrade_events(stream):
+    resources = 0
+    for _ in range(18):
+        topic, payload = stream.next_event()
+        assert topic not in ("ota-status", "mcu-update"), (topic, payload)
+        if topic == "system-resources":
+            resources += 1
+            if resources >= 3:
+                return
+    raise AssertionError("resource ticks stopped while checking idle update topics")
 
 
 def all_request_slots(path, board):
@@ -204,12 +297,11 @@ def running_daemon(root, socket_path, log):
 
 def exercise(root, path, board):
     with event_stream(path) as left:
-        initial = left.next_snapshot()
-        check_shape(initial, board)
+        initial = check_initial_topics(left, board)
         assert initial["cpu"] is None and initial["memory"] == memory(393216, 25), initial
         assert left.retry == 2000
         with event_stream(path) as right:
-            check_shape(right.next_snapshot(), board)
+            check_initial_topics(right, board)
             status, error = get(path, EVENTS)
             assert status == 503 and error["error"] == "event_stream_limit", (status, error)
             all_request_slots(path, board)
@@ -236,10 +328,14 @@ def exercise(root, path, board):
             assert 750 <= next_sample["sampled_ms"] - updated["sampled_ms"] <= 1600, next_sample
         # The second client closed. Read current data from a new connection.
         with event_stream(path) as reconnect:
-            fresh = reconnect.next_snapshot()
+            fresh = check_initial_topics(reconnect, board)
             assert fresh["sampled_ms"] >= next_sample["sampled_ms"]
             assert fresh["memory"] == memory(262144, 50)
-        print(f"{board}: metrics, GET/SSE identity, cadence, peer credentials, and connection limits passed")
+        check_fan_change(root, path, left, board)
+        check_idle_upgrade_events(left)
+        if board == "Y4":
+            assert get(path, "/api/v1/slot-power")[0] == 404
+        print(f"{board}: initial topics, change and deduplication, metrics, cadence, peer credentials, connection limits passed")
 
 
 def check_slow_reader(path, board):
@@ -273,11 +369,117 @@ def check_slow_reader(path, board):
         print(f"{board}: slow subscriber released and healthy stream stayed open for {latest-before} ms")
 
 
+def send_upload(sock, body):
+    request = f"POST {OTA} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {UPLOAD_LENGTH}\r\n\r\n"
+    sock.sendall(request.encode() + body)
+
+
+def ota_state(root, path, busy):
+    for _ in range(40):
+        status, payload = get(path, OTA + "/status")
+        assert status == 200, (status, payload)
+        staged = list((root / "data/y4-board/ota").glob("*.y4pkg"))
+        if payload["busy"] is busy and len(staged) == int(busy):
+            return payload
+        time.sleep(0.05)
+    raise AssertionError(f"OTA busy={busy} and expected staging not reached: {payload}, {staged}")
+
+
+def streamed_ota_state(stream, busy, timeout=8):
+    return stream.matching("ota-status", lambda value: value["busy"] is busy, timeout)
+
+
+def read_reply(sock):
+    with receive(sock) as response:
+        return read_json(response)
+
+
+def check_upload_cleanup(root, path, board, idle_upload):
+    with event_stream(path) as stream:
+        check_initial_topics(stream, board)
+        # Exercise excess data in the same socket read as the headers.
+        with connect(path) as upload:
+            send_upload(upload, b"x" * (UPLOAD_LENGTH + 1))
+            with receive(upload) as response:
+                status, payload = read_json(response)
+                assert status == 400 and payload["error"] == "extra_body_bytes", (status, payload)
+        ota_state(root, path, False)
+
+        # Reach admission in a separate read, then overrun the remaining length.
+        with connect(path) as upload:
+            send_upload(upload, b"x")
+            admitted = ota_state(root, path, True)
+            assert streamed_ota_state(stream, True)["job"] == admitted["job"]
+            upload.sendall(b"x" * UPLOAD_LENGTH)
+            with receive(upload) as response:
+                status, payload = read_json(response)
+                assert status == 400 and payload["error"] == "extra_body_bytes", (status, payload)
+            ota_state(root, path, False)
+            streamed_ota_state(stream, False)
+
+        # Confirm another upload can enter reception, then interrupt it mid-body.
+        with connect(path) as upload:
+            send_upload(upload, b"x")
+            admitted = ota_state(root, path, True)
+            assert streamed_ota_state(stream, True)["job"] == admitted["job"]
+        ota_state(root, path, False)
+        streamed_ota_state(stream, False)
+        with connect(path) as upload:
+            send_upload(upload, b"xx")
+            admitted = ota_state(root, path, True)
+            assert streamed_ota_state(stream, True)["job"] == admitted["job"]
+            if idle_upload:
+                upload.settimeout(36)
+                with ThreadPoolExecutor(max_workers=1) as waiting:
+                    reply = waiting.submit(read_reply, upload)
+                    # Keep consuming the event stream throughout the upload wait.
+                    streamed_ota_state(stream, False, timeout=36)
+                    status, payload = reply.result()
+                    assert status == 408 and payload["error"] == "upload_idle_timeout", (status, payload)
+        ota_state(root, path, False)
+        if idle_upload:
+            with connect(path) as upload:
+                send_upload(upload, b"x")
+                ota_state(root, path, True)
+                streamed_ota_state(stream, True)
+            ota_state(root, path, False)
+        streamed_ota_state(stream, False)
+        assert get(path, VERSION)[0] == 200
+
+    timeout = ", inactivity timeout" if idle_upload else ""
+    print(f"{board}: OTA overrun (coalesced and fragmented), disconnect{timeout}, staging removal and readmission passed")
+
+
+def configure_fixture(root, board):
+    for directory in ("data", "proc/device-tree", "proc/sys/kernel/random", "run", "var/lib"):
+        (root / directory).mkdir(parents=True)
+    (root / "proc/device-tree/compatible").write_bytes(f"myt,{board.lower()}\0".encode())
+    (root / "proc/sys/kernel/random/boot_id").write_text(BOOT_ID + "\n", encoding="ascii")
+    (root / "proc/stat").write_text(CPU_INITIAL, encoding="ascii")
+    set_memory(root, 393216)
+
+    run = root / "run/y4-board"
+    run.mkdir(mode=0o700)
+    (run / "boot.lock").touch(mode=0o600)
+    receipt = {"schema": 1, "attempt": 1, "max_attempts": 5, "status": 0,
+               "completed": True, "network_safe": True, "phase": "complete", "boot_id": BOOT_ID}
+    (run / "initialization.json").write_text(json.dumps(receipt), encoding="ascii")
+
+    fake_fan = fan_input(root, board)
+    fake_fan.parent.mkdir(parents=True)
+    fake_fan.write_text("900\n", encoding="ascii")
+    if board == "Y4":
+        (fake_fan.parent / "name").write_text("pwmfan\n", encoding="ascii")
+    else:
+        (fake_fan.parent / "pwm1").write_text("51\n", encoding="ascii")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--board", choices=("Y4", "Y12"), required=True)
     parser.add_argument("--slow-reader", action="store_true", help="exercise backpressure for up to 30 seconds")
+    parser.add_argument("--idle-upload", action="store_true", help="wait for the idle OTA upload deadline")
     parser.add_argument("daemon", type=Path)
     args = parser.parse_args()
     if os.geteuid():
@@ -291,17 +493,14 @@ def main():
         (root / "usr/bin").mkdir()
         shutil.copy2(args.runtime / "usr/bin/qemu-aarch64-static", root / "usr/bin/qemu-aarch64-static")
         shutil.copy2(args.daemon, root / "y4-boardd")
-        for directory in ("proc/device-tree", "run", "var/lib"):
-            (root / directory).mkdir(parents=True)
-        (root / "proc/device-tree/compatible").write_bytes(f"myt,{args.board.lower()}\0".encode())
-        (root / "proc/stat").write_text(CPU_INITIAL, encoding="ascii")
-        set_memory(root, 393216)
+        configure_fixture(root, args.board)
         path = root / "run/y4-board/api.sock"
         log = Path(work) / "daemon.log"
         try:
             with ExitStack() as subscribers:
                 with running_daemon(root, path, log):
                     exercise(root, path, args.board)
+                    check_upload_cleanup(root, path, args.board, args.idle_upload)
                     if args.slow_reader:
                         check_slow_reader(path, args.board)
                     stream = subscribers.enter_context(event_stream(path))
@@ -309,8 +508,7 @@ def main():
                 stream.expect_eof()
             with running_daemon(root, path, log):
                 with event_stream(path) as stream:
-                    renewed = stream.next_snapshot()
-                    check_shape(renewed, args.board)
+                    renewed = check_initial_topics(stream, args.board)
                     assert renewed["memory"] == memory(262144, 50), renewed
             print(f"{args.board}: subscribers disconnected on daemon stop and resumed after restart")
         except BaseException:

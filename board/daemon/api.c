@@ -30,10 +30,12 @@
 #define EVENT_CLIENTS 2u
 #define RESOURCE_INTERVAL_MS 1000u
 #define EVENT_WRITE_TIMEOUT_MS 5000u
+#define EVENT_DATA_CAP 4096u
 #define HEADER_BYTES 4096u
 #define RESPONSE_BYTES 24576u
 #define UPLOAD_TIME_MS 120000u
 #define OTA_UPLOAD_TIME_MS 3600000u
+#define UPLOAD_IDLE_MS 30000u
 #define HELPER_OVERDUE_MS 600000u
 #define FANS_BODY_LIMIT 512u
 #define SSH_REPLY_TIMEOUT_MS 60000u
@@ -41,7 +43,7 @@ struct client {
  int fd,upload_fd,parsed,response,upload_reserved,ota,fans_post,subscribe;
  char header[HEADER_BYTES+1],output[RESPONSE_BYTES];
  size_t header_bytes,out_bytes,out_sent,expected,received;
- uint64_t deadline;
+ uint64_t deadline,upload_idle_deadline;
  EVP_MD_CTX *digest;
  char job[33],name[64],path[PATH_MAX];
  char fans_body[FANS_BODY_LIMIT+1u];
@@ -49,11 +51,28 @@ struct client {
  uint64_t ssh_request;
  char ssh_body[Y4_SSH_BODY_LIMIT+1u];
 };
+enum event_topic {
+ EVENT_RESOURCES,EVENT_FANS,EVENT_TEMPERATURE,EVENT_SLOT_POWER,EVENT_OTA,EVENT_MCU,EVENT_TOPIC_COUNT
+};
+static const char *const event_names[EVENT_TOPIC_COUNT]={
+ [EVENT_RESOURCES]="system-resources",
+ [EVENT_FANS]="fan-status",
+ [EVENT_TEMPERATURE]="temperature",
+ [EVENT_SLOT_POWER]="slot-power",
+ [EVENT_OTA]="ota-status",
+ [EVENT_MCU]="mcu-update",
+};
+struct event_value {
+ uint64_t generation;
+ size_t bytes;
+ char data[EVENT_DATA_CAP];
+};
 struct event_client {
  int fd;
  size_t bytes,sent;
- uint64_t deadline,sequence;
- char output[Y4_RESOURCE_JSON_CAP+256u];
+ uint64_t deadline,seen[EVENT_TOPIC_COUNT];
+ unsigned next_topic;
+ char output[EVENT_DATA_CAP+256u];
 };
 struct update_job {
  pid_t pid;
@@ -70,8 +89,10 @@ static int socket_owned;
 static struct update_job job;
 static struct y4_board_sample sample;
 static struct y4_resource_sampler resource_sampler;
-static char resource_json[Y4_RESOURCE_JSON_CAP];
-static uint64_t resource_sequence,resource_next;
+static struct event_value event_values[EVENT_TOPIC_COUNT];
+static uint64_t resource_next,event_next,telemetry_sampled_ms,mcu_event_started_ms,ota_phase_generation;
+static int telemetry_fresh,fan_event_dirty,ota_event_phase=-1;
+static char mcu_event_phase[sizeof job.phase];
 static void stop(int sig){(void)sig;y4_board_stopping=1;}
 static int valid_hex(const char *s,size_t n) {
  if(strlen(s)!=n)return 0;
@@ -258,12 +279,18 @@ static int job_json(char *out,size_t cap) {
  progress_valid?"true":"false",written_text,verified_text,image_text,job.version,job.uid,job.verified?"true":"false",job.sequence);
  return n<0||(size_t)n>=cap?-EOVERFLOW:n;
 }
+static void discard_upload(struct client *c) {
+ if(c->ota){y4_board_ota_abort();c->ota=0;}
+ if(c->upload_fd>=0){close(c->upload_fd);c->upload_fd=-1;}
+ if(c->upload_reserved){upload_busy=0;c->upload_reserved=0;}
+ if(c->digest){EVP_MD_CTX_free(c->digest);c->digest=NULL;}
+ /* A submitted MCU job owns the file after upload_finish clears c->path. */
+ if(*c->path){(void)unlink(c->path);c->path[0]=0;}
+ c->upload_idle_deadline=0;
+}
 static void client_close(struct client*c) {
- if(c->ota)y4_board_ota_abort();
- if(c->fd>=0)close(c->fd);if(c->upload_fd>=0)close(c->upload_fd);
- if(c->upload_reserved)upload_busy=0;
- if(c->digest)EVP_MD_CTX_free(c->digest);
- if(*c->path)(void)unlink(c->path); /* Only this unsubmitted upload is owned. */
+ if(c->fd>=0)close(c->fd);
+ discard_upload(c);
  explicit_bzero(c,sizeof *c);c->fd=c->upload_fd=-1;
 }
 static const char *reason(unsigned code) {
@@ -283,14 +310,64 @@ static void response(struct client*c,unsigned code,const char *body) {
 static void error_response(struct client*c,unsigned code,int status,const char *message) {
  char text[256];(void)snprintf(text,sizeof text,"{\"status\":%d,\"error\":\"%s\"}\n",status,message);response(c,code,text);
 }
+static void upload_error(struct client *c,unsigned code,int e,const char *message) {
+ discard_upload(c);
+ error_response(c,code,e,message);
+}
+static void publish_event(enum event_topic topic,const char *data,int result) {
+ struct event_value *value=&event_values[topic];
+ if(result<=0||(size_t)result>=sizeof value->data)return;
+ size_t bytes=(size_t)result;
+ while(bytes&&(data[bytes-1u]=='\n'||data[bytes-1u]=='\r'))--bytes;
+ if(bytes==value->bytes&&!memcmp(data,value->data,bytes))return;
+ memcpy(value->data,data,bytes);
+ value->data[bytes]=0;
+ value->bytes=bytes;
+ ++value->generation;
+}
 static void resource_tick(uint64_t now) {
  if(now<resource_next)return;
  resource_next=now+RESOURCE_INTERVAL_MS;
- if(y4_resource_refresh(&resource_sampler,now,resource_json,sizeof resource_json)<0) {
-  resource_json[0]=0;
-  return;
+ char json[Y4_RESOURCE_JSON_CAP];
+ int n=y4_resource_refresh(&resource_sampler,now,json,sizeof json);
+ publish_event(EVENT_RESOURCES,json,n);
+}
+static void refresh_events(uint64_t now) {
+ int periodic=now>=event_next;
+ if(periodic)event_next=now+RESOURCE_INTERVAL_MS;
+ char json[EVENT_DATA_CAP];
+ int fresh=sample.magic==Y4_BOARD_SAMPLE_MAGIC&&sample.sampled_ms&&
+           now>=sample.sampled_ms&&now-sample.sampled_ms<5000u;
+ if(periodic&&(!event_values[EVENT_TEMPERATURE].generation||
+               telemetry_sampled_ms!=sample.sampled_ms||telemetry_fresh!=fresh)) {
+  int n=y4_board_temperature_json(&sample,json,sizeof json);
+  publish_event(EVENT_TEMPERATURE,json,n);
+  if(!strcmp(Y4_DEVICE_ID,"Y12")){
+   n=y12_board_power_json(&sample,json,sizeof json);
+   publish_event(EVENT_SLOT_POWER,json,n);
+  }
+  fan_event_dirty=1;
+  telemetry_sampled_ms=sample.sampled_ms;
+  telemetry_fresh=fresh;
  }
- ++resource_sequence;
+ if(fan_event_dirty) {
+  int n=y4_board_fans_json(&sample,json,sizeof json);
+  publish_event(EVENT_FANS,json,n);
+  fan_event_dirty=0;
+ }
+ int ota_phase=y4_board_ota_phase();
+ if(periodic||ota_event_phase!=ota_phase) {
+  int n=y4_board_ota_status_json(json,sizeof json);
+  publish_event(EVENT_OTA,json,n);
+  if(ota_event_phase!=ota_phase)ota_phase_generation=event_values[EVENT_OTA].generation;
+  ota_event_phase=ota_phase;
+ }
+ if(periodic||strcmp(mcu_event_phase,job.phase)||mcu_event_started_ms!=job.started_ms) {
+  int n=job_json(json,sizeof json);
+  publish_event(EVENT_MCU,json,n);
+  memcpy(mcu_event_phase,job.phase,sizeof mcu_event_phase);
+  mcu_event_started_ms=job.started_ms;
+ }
 }
 
 static void event_close(struct event_client *stream) {
@@ -298,25 +375,40 @@ static void event_close(struct event_client *stream) {
  *stream=(struct event_client){.fd=-1};
 }
 
-static int event_queue(struct event_client *stream,int opening,uint64_t now) {
+static int event_queue(struct event_client *stream,enum event_topic topic,int opening,uint64_t now) {
  static const char preamble[]=
   "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n"
   "Connection: close\r\nCache-Control: no-store, no-transform\r\n"
   "X-Accel-Buffering: no\r\n\r\nretry: 2000\n\n";
- int n=snprintf(stream->output,sizeof stream->output,"%sevent: system-resources\ndata: %s\n\n",
-                opening?preamble:"",resource_json);
+ const struct event_value *value=&event_values[topic];
+ int n=snprintf(stream->output,sizeof stream->output,"%sevent: %s\ndata: %s\n\n",
+                opening?preamble:"",event_names[topic],value->data);
  if(n<0||(size_t)n>=sizeof stream->output)return -EOVERFLOW;
  stream->bytes=(size_t)n;
  stream->sent=0;
  stream->deadline=now+EVENT_WRITE_TIMEOUT_MS;
- stream->sequence=resource_sequence;
+ stream->seen[topic]=value->generation;
+ stream->next_topic=((unsigned)topic+1u)%EVENT_TOPIC_COUNT;
+ return 0;
+}
+static int event_queue_next(struct event_client *stream,uint64_t now) {
+ if(stream->sent!=stream->bytes)return 0;
+ /* Give phase changes a send opportunity before the next OTA apply tick.
+  * Progress counters and other observations share the remaining turns. */
+ if(stream->seen[EVENT_OTA]<ota_phase_generation)
+  return event_queue(stream,EVENT_OTA,0,now);
+ for(unsigned offset=0;offset<EVENT_TOPIC_COUNT;offset++) {
+  unsigned topic=(stream->next_topic+offset)%EVENT_TOPIC_COUNT;
+  if(stream->seen[topic]!=event_values[topic].generation)
+   return event_queue(stream,(enum event_topic)topic,0,now);
+ }
  return 0;
 }
 
 /* Only a validated and root-authenticated HTTP request is promoted.
  * A subscriber holds a streaming slot instead of a regular request slot. */
 static void event_subscribe(struct client *c,struct event_client streams[EVENT_CLIENTS]) {
- if(!resource_json[0]){error_response(c,503,-EAGAIN,"observation_unavailable");return;}
+ if(!event_values[EVENT_RESOURCES].generation){error_response(c,503,-EAGAIN,"observation_unavailable");return;}
  for(unsigned i=0;i<EVENT_CLIENTS;i++) {
   struct event_client *stream=&streams[i];
   if(stream->fd>=0)continue;
@@ -326,7 +418,9 @@ static void event_subscribe(struct client *c,struct event_client streams[EVENT_C
    error_response(c,503,-errno,"event_stream_unavailable");
    return;
   }
-  if(event_queue(stream,1,y4_board_now_ms())) {
+  uint64_t now=y4_board_now_ms();
+  refresh_events(now);
+  if(event_queue(stream,EVENT_RESOURCES,1,now)) {
    error_response(c,500,-EOVERFLOW,"response_overflow");
    return;
   }
@@ -385,12 +479,13 @@ static int upload_admit(struct client*c) {
  return EVP_DigestInit_ex(c->digest,EVP_sha256(),NULL)==1?0:-EIO;
 }
 static void upload_finish(struct client*c) {
- if(fsync(c->upload_fd)){error_response(c,500,-errno,"upload_fsync_failed");return;}
- if(close(c->upload_fd)){c->upload_fd=-1;error_response(c,500,-errno,"upload_close_failed");return;}c->upload_fd=-1;
+ if(fsync(c->upload_fd)){upload_error(c,500,-errno,"upload_fsync_failed");return;}
+ if(close(c->upload_fd)){c->upload_fd=-1;upload_error(c,500,-errno,"upload_close_failed");return;}c->upload_fd=-1;
  unsigned char digest[32];unsigned length=0;
- if(EVP_DigestFinal_ex(c->digest,digest,&length)!=1||length!=32u){error_response(c,500,-EIO,"upload_hash_failed");return;}
+ if(EVP_DigestFinal_ex(c->digest,digest,&length)!=1||length!=32u){upload_error(c,500,-EIO,"upload_hash_failed");return;}
  EVP_MD_CTX_free(c->digest);c->digest=NULL;
  c->upload_reserved=0;upload_busy=0;
+ c->upload_idle_deadline=0;
  memset(&job,0,sizeof job);memcpy(job.id,c->job,sizeof job.id);memcpy(job.name,c->name,sizeof job.name);memcpy(job.path,c->path,sizeof job.path);
  c->path[0]=0; /* Durable job owns the immutable candidate beyond HTTP close. */
  for(unsigned i=0;i<32u;i++)(void)snprintf(job.sha256+i*2u,3,"%02x",digest[i]);
@@ -400,9 +495,11 @@ static void upload_finish(struct client*c) {
  if(n<0)error_response(c,500,n,"response_overflow");else response(c,202,body);
 }
 static void ota_upload_finish(struct client*c) {
- c->ota=0;
  int e=y4_board_ota_finish();
- if(e){error_response(c,e==-ENOSPC?507u:500u,e,"ota_launch_failed");return;}
+ if(e){upload_error(c,e==-ENOSPC?507u:500u,e,"ota_launch_failed");return;}
+ /* Once accepted, OTA continues independently of the HTTP connection. */
+ c->ota=0;
+ c->upload_idle_deadline=0;
  char body[1024];int n=y4_board_ota_status_json(body,sizeof body);
  if(n<0)error_response(c,500,n,"response_overflow");else response(c,202,body);
 }
@@ -422,8 +519,9 @@ static void fans_finish(struct client*c) {
      (strcmp(group,"pwm-fan-out0")&&strcmp(group,"pwm-fan-out2"))) {
    error_response(c,400,-EBADMSG,"fans_group_or_duty_invalid");return;
   }
-  int err=y12_board_set_fan(!strcmp(group,"pwm-fan-out2"),(unsigned)percent);
+  int err=y12_board_set_fan(!strcmp(group,"pwm-fan-out2"),(unsigned)percent,&sample);
   if(err){error_response(c,503,err,"fans_apply_failed");return;}
+  fan_event_dirty=1;
   char body[2048];
   if(y4_board_fans_json(&sample,body,sizeof body)<0)
    error_response(c,500,-EOVERFLOW,"response_overflow");
@@ -538,19 +636,22 @@ static void upload_bytes(struct client*c,const char*data,size_t bytes) {
   if(c->received==c->expected)fans_finish(c);
   return;
  }
+ if(bytes>c->expected-c->received){upload_error(c,400,-EPROTO,"extra_body_bytes");return;}
  if(c->ota) {
   int e=y4_board_ota_write(data,bytes);
-  if(e){error_response(c,500,e,"ota_write_failed");return;}
+  if(e){upload_error(c,e==-ENOSPC?507u:500u,e,"ota_write_failed");return;}
   c->received+=bytes;
   if(c->received==c->expected)ota_upload_finish(c);
+  else c->upload_idle_deadline=y4_board_now_ms()+UPLOAD_IDLE_MS;
   return;
  }
- if(bytes>c->expected-c->received){error_response(c,400,-EPROTO,"extra_body_bytes");return;}
  size_t at=0;while(at<bytes){ssize_t n=write(c->upload_fd,data+at,bytes-at);
-  if(n<0){if(errno==EINTR)continue;error_response(c,500,-errno,"upload_write_failed");return;}
-  if(!n){error_response(c,500,-EIO,"upload_write_failed");return;}at+=(size_t)n;}
- if(EVP_DigestUpdate(c->digest,data,bytes)!=1){error_response(c,500,-EIO,"upload_hash_failed");return;}
- c->received+=bytes;if(c->received==c->expected)upload_finish(c);
+  if(n<0){if(errno==EINTR)continue;upload_error(c,500,-errno,"upload_write_failed");return;}
+  if(!n){upload_error(c,500,-EIO,"upload_write_failed");return;}at+=(size_t)n;}
+ if(EVP_DigestUpdate(c->digest,data,bytes)!=1){upload_error(c,500,-EIO,"upload_hash_failed");return;}
+ c->received+=bytes;
+ if(c->received==c->expected)upload_finish(c);
+ else c->upload_idle_deadline=y4_board_now_ms()+UPLOAD_IDLE_MS;
 }
 static int number(const char*s,size_t*out) {
  if(!*s||(*s=='0'&&s[1]))return -EINVAL;size_t value=0;
@@ -578,7 +679,7 @@ static void route(struct client*c,char*header) {
   if(length){error_response(c,400,-EPROTO,"get_body_unavailable");return;}
   if(!strcmp(path,"/api/v1/ssh")){ssh_submit(c,Y4_SSH_STATUS,NULL,0);return;}
   if(!strcmp(path,"/api/v1/system/resources")){
-   if(resource_json[0])response(c,200,resource_json);
+   if(event_values[EVENT_RESOURCES].generation)response(c,200,event_values[EVENT_RESOURCES].data);
    else error_response(c,503,-EAGAIN,"observation_unavailable");
    return;
   }
@@ -621,7 +722,9 @@ static void route(struct client*c,char*header) {
   if(ready){error_response(c,503,ready,"initialization_incomplete");return;}
   int e=y4_board_ota_admit(length);
   if(e){error_response(c,e==-EBUSY?409u:e==-ENOSPC?507u:e==-EFBIG?413u:503u,e,"ota_admission_failed");return;}
-  c->expected=length;c->parsed=1;c->ota=1;c->deadline=y4_board_now_ms()+OTA_UPLOAD_TIME_MS;
+  uint64_t now=y4_board_now_ms();
+  c->expected=length;c->parsed=1;c->ota=1;c->deadline=now+OTA_UPLOAD_TIME_MS;
+  c->upload_idle_deadline=now+UPLOAD_IDLE_MS;
   return;
  }
  if(!strcmp(path,"/api/v1/fans")) {
@@ -657,8 +760,10 @@ static void route(struct client*c,char*header) {
  if(!have_length){error_response(c,411,-EINVAL,"content_length_required");return;}
  if(!length||length>Y4_BOARD_PACKAGE_LIMIT){error_response(c,413,-EFBIG,"package_size_rejected");return;}
  c->expected=length;
- int e=upload_admit(c);if(e){error_response(c,e==-EBUSY?409u:e==-ENOSPC?507u:503u,e,"upload_admission_failed");return;}
- c->parsed=1;c->deadline=y4_board_now_ms()+UPLOAD_TIME_MS;
+ int e=upload_admit(c);if(e){upload_error(c,e==-EBUSY?409u:e==-ENOSPC?507u:503u,e,"upload_admission_failed");return;}
+ uint64_t now=y4_board_now_ms();
+ c->parsed=1;c->deadline=now+UPLOAD_TIME_MS;
+ c->upload_idle_deadline=now+UPLOAD_IDLE_MS;
 }
 static void client_read(struct client*c,struct event_client streams[EVENT_CLIENTS]) {
  if(c->parsed) {
@@ -776,16 +881,22 @@ int main(int argc,char **argv) {
   struct pollfd fds[2+CLIENTS+EVENT_CLIENTS];fds[0]=(struct pollfd){server,POLLIN,0};fds[1]=(struct pollfd){monitor>0?channels[0]:-1,POLLIN,0};
   for(unsigned i=0;i<CLIENTS;i++)fds[i+2u]=(struct pollfd){clients[i].fd,clients[i].response?POLLOUT:clients[i].ssh_request?0:POLLIN,0};
   for(unsigned i=0;i<EVENT_CLIENTS;i++) {
+   if(streams[i].fd>=0){refresh_events(now);break;}
+  }
+  for(unsigned i=0;i<EVENT_CLIENTS;i++) {
    struct event_client *stream=&streams[i];
-   if(stream->fd>=0&&stream->sent==stream->bytes&&resource_json[0]&&
-      stream->sequence!=resource_sequence&&event_queue(stream,0,now))event_close(stream);
+   if(stream->fd>=0&&event_queue_next(stream,now))event_close(stream);
    fds[2u+CLIENTS+i]=(struct pollfd){stream->fd,stream->sent<stream->bytes?POLLOUT:0,0};
   }
   int ready=poll(fds,2u+CLIENTS+EVENT_CLIENTS,100);if(ready<0&&errno!=EINTR){fprintf(stderr,"y4-board poll failed status=%d\n",-errno);break;}
   if(fds[0].revents&POLLIN)accept_clients(server,clients);
   if(fds[1].revents&POLLIN)for(unsigned n=0;n<4u;n++) {
    struct y4_board_sample next;ssize_t got=recv(channels[0],&next,sizeof next,MSG_DONTWAIT|MSG_TRUNC);
-   if(got<0)break;if(got==(ssize_t)sizeof next&&next.magic==Y4_BOARD_SAMPLE_MAGIC)sample=next;
+   if(got<0)break;
+   if(got==(ssize_t)sizeof next&&next.magic==Y4_BOARD_SAMPLE_MAGIC){
+    if(!strcmp(Y4_DEVICE_ID,"Y12"))y12_board_fans_preserve_readback(&sample,&next);
+    sample=next;
+   }
   }
   now=y4_board_now_ms();
   for(unsigned i=0;i<EVENT_CLIENTS;i++)event_io(&streams[i],fds[2u+CLIENTS+i].revents,now);
@@ -802,14 +913,16 @@ int main(int argc,char **argv) {
     else if(sent<0&&errno!=EAGAIN&&errno!=EWOULDBLOCK&&errno!=EINTR){client_close(c);continue;}
     if(c->out_sent==c->out_bytes){client_close(c);continue;}
    }
-   if(now>=c->deadline){
+   int upload_idle=c->upload_idle_deadline&&now>=c->upload_idle_deadline;
+   if(now>=c->deadline||upload_idle){
     if(c->response)client_close(c);
     else {
      c->ssh_request=0;
-     error_response(c,408,-ETIMEDOUT,"request_deadline");
+     discard_upload(c);
+     error_response(c,408,-ETIMEDOUT,upload_idle?"upload_idle_timeout":"request_deadline");
     }
    }
-   else if(fds[i+2u].revents&POLLHUP){if(!c->response)client_close(c);}
+   else if(fds[i+2u].revents&POLLHUP)client_close(c);
   }
  }
  if(server>=0)close(server);

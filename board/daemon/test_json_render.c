@@ -1,9 +1,65 @@
 /* Host smoke test: render the new/extended JSON builders with a synthetic
  * sample and validate the output is parseable JSON. */
 #include "board_daemon.h"
+#include <assert.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
+static void check_y12_fan_samples(void)
+{
+ uint64_t now = y4_board_now_ms();
+ uint64_t stale = now > 5000u ? now - 5000u : 0;
+ struct y4_board_sample fresh = {
+  .magic = Y4_BOARD_SAMPLE_MAGIC,
+  .y12_fans = {
+   .sampled_ms = now,
+   .pwm_sampled_ms = {now, now},
+   .pwm_raw = {51, 102},
+   .rpm = {1000, -ENODEV, 500, 0, 2200, 3000},
+  },
+ };
+ char buf[2048];
+ assert(y4_board_fans_json(&fresh, buf, sizeof buf) > 0);
+ assert(strstr(buf, "\"fresh\":true"));
+ assert(strstr(buf, "\"pwm_raw\":51"));
+ assert(strstr(buf, "\"pwm_raw\":102"));
+ assert(strstr(buf, "{\"id\":\"FAN1\",\"group\":\"pwm-fan-out2\",\"rpm\":1000}"));
+ assert(strstr(buf, "{\"id\":\"FAN2\",\"group\":\"pwm-fan-out0\",\"rpm\":null}"));
+ assert(strstr(buf, "{\"id\":\"FAN4\",\"group\":\"pwm-fan-out2\",\"rpm\":0}"));
+ assert(strstr(buf, "{\"id\":\"FAN6\",\"group\":\"pwm-fan-out2\",\"rpm\":3000}"));
+
+ /* An earlier monitor sample must not undo a completed POST readback. */
+ struct y4_board_sample delayed = fresh;
+ delayed.y12_fans.sampled_ms = stale;
+ delayed.y12_fans.pwm_sampled_ms[0] = stale;
+ delayed.y12_fans.pwm_raw[0] = 20;
+ delayed.y12_fans.pwm_raw[1] = 10; /* Same clock tick as the readback. */
+ y12_board_fans_preserve_readback(&fresh, &delayed);
+ assert(delayed.y12_fans.pwm_raw[0] == 51);
+ assert(delayed.y12_fans.pwm_raw[1] == 102);
+ assert(y4_board_fans_json(&delayed, buf, sizeof buf) > 0);
+ assert(strstr(buf, "\"fresh\":false"));
+ assert(strstr(buf, "\"pwm_raw\":51"));
+ assert(strstr(buf, "{\"id\":\"FAN1\",\"group\":\"pwm-fan-out2\",\"rpm\":null}"));
+
+ /* Fresh monitor readings replace the overlay, including read failures. */
+ struct y4_board_sample next = fresh;
+ next.y12_fans.pwm_sampled_ms[0] = now + 1;
+ next.y12_fans.pwm_raw[0] = -EIO;
+ y12_board_fans_preserve_readback(&fresh, &next);
+ assert(next.y12_fans.pwm_raw[0] == -EIO);
+
+ /* Uninitialized measurements are null, not a fabricated stopped fan. */
+ struct y4_board_sample empty = {0};
+ assert(y4_board_fans_json(&empty, buf, sizeof buf) > 0);
+ assert(strstr(buf, "\"sampled_ms\":0,\"age_ms\":0,\"fresh\":false"));
+ assert(strstr(buf, "\"pwm_raw\":null"));
+ assert(strstr(buf, "{\"id\":\"FAN1\",\"group\":\"pwm-fan-out2\",\"rpm\":null}"));
+}
+
 int main(void) {
+ if (!strcmp(Y4_DEVICE_ID, "Y12"))
+  check_y12_fan_samples();
  struct y4_board_sample s;
  memset(&s,0,sizeof s);
  s.magic=Y4_BOARD_SAMPLE_MAGIC;

@@ -26,6 +26,12 @@ struct y4_board_temperature { int valid,error; int64_t millicelsius;
  * valid=0 means the manager state was not observable this cycle; state then
  * carries no evidence and every consumer must treat it as unknown. */
 struct y4_network_manager_state { int valid,state; };
+struct y12_board_fan_sample {
+ uint64_t sampled_ms;
+ uint64_t pwm_sampled_ms[2];
+ int pwm_raw[2];
+ int rpm[6];
+};
 struct y4_board_sample {
  uint32_t magic;
  uint64_t sampled_ms,completed_ms;
@@ -48,6 +54,7 @@ struct y4_board_sample {
  uint8_t fan_policy_mode,fan_policy_status,fan_policy_duty[3];
  uint8_t fan1_valid,fan2_valid;
  uint16_t fan1_rpm,fan2_rpm;
+ struct y12_board_fan_sample y12_fans;
  int power_error;
  uint16_t y12_present_valid,y12_present;
  uint16_t power_valid,power_sequence,voltage_mv[12];
@@ -70,7 +77,9 @@ int y4_board_initialization_read(struct y4_board_initialization *);
 int y4_board_nm_states(struct y4_network_manager_state [Y4_NET_LOGICAL_COUNT]);
 int y4_board_sample_json(const struct y4_board_sample *,char *,size_t);
 int y4_board_version_json(const struct y4_board_sample *,char *,size_t);
-int y12_board_set_fan(unsigned group,unsigned percent);
+int y12_board_set_fan(unsigned group,unsigned percent,struct y4_board_sample *);
+void y12_board_fans_sample(struct y4_board_sample *);
+void y12_board_fans_preserve_readback(const struct y4_board_sample *,struct y4_board_sample *);
 int y12_board_power_json(const struct y4_board_sample *,char *,size_t);
 int y4_board_fans_json(const struct y4_board_sample *,char *,size_t);
 int y4_board_temperature_json(const struct y4_board_sample *,char *,size_t);
@@ -81,6 +90,7 @@ int y4_board_ota_write(const char *,size_t);
 int y4_board_ota_finish(void);
 void y4_board_ota_abort(void);
 void y4_board_ota_tick(void);
+int y4_board_ota_phase(void);
 int y4_board_ota_status_json(char *,size_t);
 int y4_board_ota_confirm(void);
 int y4_board_kernels_gc(void);

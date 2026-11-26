@@ -3,9 +3,8 @@
  *
  * Nothing here forks: the whole apply (verify, slot write, hash, grubenv,
  * reboot request) is a resumable state machine advanced by the daemon's
- * existing poll loop in bounded slices, so the single y4-boardd process
- * performs the entire update while the HTTP API keeps answering. The reboot
- * is the reboot(2) syscall, so no child process and no exec is ever used.
+ * existing poll loop in bounded slices. The reboot is requested over
+ * systemd D-Bus after the inactive slot has been verified.
  *
  *   POST /api/v1/update          streams a signed .y4pkg to /data
  *   (state machine)              verifies, writes the inactive slot,
@@ -135,7 +134,9 @@ struct ota_job {
   size_t uts_tail_len;
   EVP_MD_CTX *k_digest;
 };
-static struct ota_job ota;
+static struct ota_job ota = {
+  .pkg_fd = -1, .out_fd = -1, .verify_fd = -1, .k_fd = -1,
+};
 static int ota_upload_fd = -1;
 static uint64_t ota_received;
 static EVP_MD_CTX *ota_upload_digest;
@@ -144,7 +145,6 @@ static EVP_MD_CTX *ota_upload_digest;
  * aligned buffer and written with O_DIRECT. */
 static unsigned char *ota_upload_stage;
 static size_t ota_upload_used;
-static uint64_t ota_upload_written;
 
 static const char *state_name(int state) {
   switch (state) {
@@ -450,6 +450,8 @@ static void ota_release(void) {
   ota.win = NULL;
   ota.win_len = 0;
   ota.win_base = 0;
+  ZSTD_freeDCtx(ota.dctx);
+  ota.dctx = NULL;
   free(ota.zin_buf);
   ota.zin_buf = NULL;
 }
@@ -1395,8 +1397,43 @@ static int step_grubenv(void) {
 
 /* ---- public API used by api.c ---- */
 
+int y4_board_ota_phase(void) {
+  return ota.state;
+}
+
 int y4_board_ota_busy(void) {
   return ota.state != OTA_IDLE && ota.state != OTA_FAILED;
+}
+
+static int release_upload(void) {
+  int error = 0;
+  if (ota_upload_fd >= 0) {
+    if (close(ota_upload_fd)) error = -errno;
+    ota_upload_fd = -1;
+  }
+  free(ota_upload_stage);
+  ota_upload_stage = NULL;
+  EVP_MD_CTX_free(ota_upload_digest);
+  ota_upload_digest = NULL;
+  ota_upload_used = 0;
+  ota_received = 0;
+  return error;
+}
+
+/* An accepted upload owns the staging path until finish transfers the package
+ * to the apply state machine. Discard it on every failure while still owned. */
+static void discard_upload(void) {
+  (void)release_upload();
+  if (unlink(ota.package) && errno != ENOENT)
+    fprintf(stderr, "y4-board ota: failed to discard upload status=%d\n", -errno);
+}
+
+static int fail_upload(int error) {
+  discard_upload();
+  ota.code = error;
+  ota.completed_ms = y4_board_now_ms();
+  ota.state = OTA_FAILED;
+  return error;
 }
 
 int y4_board_ota_admit(size_t expected) {
@@ -1419,22 +1456,14 @@ int y4_board_ota_admit(size_t expected) {
   ota_upload_fd = open(ota.package, O_WRONLY | O_CREAT | O_EXCL | O_DIRECT | O_CLOEXEC, 0600);
   if (ota_upload_fd < 0) ota_upload_fd = open(ota.package, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
   if (ota_upload_fd < 0) return -errno;
-  if (posix_memalign((void **)&ota_upload_stage, 4096, OTA_IO_CHUNK)) {
-    ota_upload_stage = NULL;
-    close(ota_upload_fd); ota_upload_fd = -1; unlink(ota.package);
-    return -ENOMEM;
-  }
-  ota_upload_used = 0;
-  ota_upload_written = 0;
-  ota_upload_digest = EVP_MD_CTX_new();
-  if (!ota_upload_digest || EVP_DigestInit_ex(ota_upload_digest, EVP_sha256(), NULL) != 1) {
-    if (ota_upload_digest) { EVP_MD_CTX_free(ota_upload_digest); ota_upload_digest = NULL; }
-    close(ota_upload_fd); ota_upload_fd = -1; unlink(ota.package);
-    return -EIO;
-  }
-  ota_received = 0;
   ota.started_ms = y4_board_now_ms();
   ota.state = OTA_ACCEPTED;
+  if (posix_memalign((void **)&ota_upload_stage, 4096, OTA_IO_CHUNK))
+    return fail_upload(-ENOMEM);
+  ota_upload_digest = EVP_MD_CTX_new();
+  if (!ota_upload_digest) return fail_upload(-ENOMEM);
+  if (EVP_DigestInit_ex(ota_upload_digest, EVP_sha256(), NULL) != 1)
+    return fail_upload(-EIO);
   return 0;
 }
 
@@ -1443,15 +1472,16 @@ static int upload_flush(size_t bytes) {
   while (at < bytes) {
     ssize_t n = write(ota_upload_fd, ota_upload_stage + at, bytes - at);
     if (n < 0) { if (errno == EINTR) continue; return -errno; }
+    if (!n) return -EIO;
     at += (size_t)n;
   }
-  ota_upload_written += bytes;
   return 0;
 }
 
 int y4_board_ota_write(const char *data, size_t bytes) {
-  if (ota.state != OTA_ACCEPTED || ota_upload_fd < 0 || !ota_upload_stage) return -EINVAL;
-  if (EVP_DigestUpdate(ota_upload_digest, data, bytes) != 1) return -EIO;
+  if (ota.state != OTA_ACCEPTED) return -EINVAL;
+  if (ota_upload_fd < 0 || !ota_upload_stage || !ota_upload_digest) return fail_upload(-EINVAL);
+  if (EVP_DigestUpdate(ota_upload_digest, data, bytes) != 1) return fail_upload(-EIO);
   ota_received += bytes;
   const unsigned char *source = (const unsigned char *)data;
   size_t left = bytes;
@@ -1464,7 +1494,7 @@ int y4_board_ota_write(const char *data, size_t bytes) {
     left -= take;
     if (ota_upload_used == OTA_IO_CHUNK) {
       int e = upload_flush(ota_upload_used);
-      if (e) return e;
+      if (e) return fail_upload(e);
       ota_upload_used = 0;
     }
   }
@@ -1472,36 +1502,27 @@ int y4_board_ota_write(const char *data, size_t bytes) {
 }
 
 int y4_board_ota_finish(void) {
-  if (ota.state != OTA_ACCEPTED || ota_upload_fd < 0) return -EINVAL;
+  if (ota.state != OTA_ACCEPTED) return -EINVAL;
+  if (ota_upload_fd < 0 || !ota_upload_stage || !ota_upload_digest || !ota_received)
+    return fail_upload(-EINVAL);
   if (ota_upload_used) {
     size_t padded = (ota_upload_used + 511u) & ~(size_t)511u;
     if (padded > ota_upload_used)
       memset(ota_upload_stage + ota_upload_used, 0, padded - ota_upload_used);
     int e = upload_flush(padded);
-    ota_upload_used = 0;
-    if (e) { close(ota_upload_fd); ota_upload_fd = -1; return e; }
-    if (ftruncate(ota_upload_fd, (off_t)ota_received)) {
-      int t = -errno; close(ota_upload_fd); ota_upload_fd = -1; return t;
-    }
+    if (e) return fail_upload(e);
+    if (ftruncate(ota_upload_fd, (off_t)ota_received)) return fail_upload(-errno);
   }
-  free(ota_upload_stage);
-  ota_upload_stage = NULL;
-  if (fsync(ota_upload_fd)) { int e = -errno; close(ota_upload_fd); ota_upload_fd = -1; return e; }
-  if (close(ota_upload_fd)) { ota_upload_fd = -1; return -errno; }
-  ota_upload_fd = -1;
-  if (ota_upload_digest) { EVP_MD_CTX_free(ota_upload_digest); ota_upload_digest = NULL; }
+  if (fsync(ota_upload_fd)) return fail_upload(-errno);
+  int error = release_upload();
+  if (error) return fail_upload(error);
   ota.state = OTA_OPEN;
   return 0;
 }
 
 void y4_board_ota_abort(void) {
-  free(ota_upload_stage);
-  ota_upload_stage = NULL;
-  ota_upload_used = 0;
-  if (ota_upload_fd >= 0) { close(ota_upload_fd); ota_upload_fd = -1; }
-  if (ota_upload_digest) { EVP_MD_CTX_free(ota_upload_digest); ota_upload_digest = NULL; }
-  if (ota.state == OTA_ACCEPTED && ota.package[0]) (void)unlink(ota.package);
-  ota_release();
+  if (ota.state != OTA_ACCEPTED) return;
+  discard_upload();
   ota.state = OTA_IDLE;
 }
 
@@ -1571,7 +1592,10 @@ void y4_board_ota_tick(void) {
             }
             closedir(dir);
           }
+          ota_release();
           ota.state = OTA_READY;
+          /* Let the API publish readiness before dispatching the reboot. */
+          return;
         }
         break;
       case OTA_READY:

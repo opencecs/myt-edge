@@ -13,7 +13,7 @@
 
 ## 2. 通用约定
 
-**成功响应**：200（查询、确认完成或打开事件流）、202（大上传已受理，处理异步进行）。成功的 JSON 响应和每条资源事件数据含 `"schema":1`。
+**成功响应**：200（查询、确认完成或打开事件流）、202（大上传已受理，处理异步进行）。成功的 JSON 响应和 SSE 事件数据含 `"schema":1`。
 
 **错误响应**（全部路由统一）：
 
@@ -31,7 +31,7 @@
 | 403 | 权限或策略拒绝 | SSH 单元被屏蔽或 PAM 拒绝修改 |
 | 404 | 路由或账号不存在 | SSH 账号必须已存在于本机 |
 | 405 | 方法不允许 | 方法既非 GET 也非 POST（实测：GET/POST 互打到对方路由返回 404 unknown_route，因为该路由对另一方法不存在） |
-| 408 | 请求超时 | 上传超时（见各端点时限） |
+| 408 | 请求超时 | `upload_idle_timeout` 表示固件上传停传约 30 秒。`request_deadline` 表示请求达到总期限。 |
 | 409 | 冲突 | 已有任务在跑（-EBUSY） |
 | 411 | 缺 Content-Length | POST 未带长度 |
 | 413 | 载荷超限 | 超包上限 |
@@ -61,7 +61,11 @@
 | 15 | POST | `/api/v1/ssh` | `{"enabled":true}` 或 `{"enabled":false}` | 启停受管的 OpenSSH 单元，同步开机启用状态 |
 | 16 | POST | `/api/v1/ssh/password` | `{"username":"root","password":"<新密码>"}` | 通过 Debian PAM 修改当前槽中的本机登录密码 |
 | 17 | GET | `/api/v1/system/resources` | 无 | 整机 CPU 和内存的最新快照 |
-| 18 | GET | `/api/v1/events` | 无 | SSE 事件流，目前发送 `system-resources` |
+| 18 | GET | `/api/v1/events` | 无 | SSE 事件流，持续发送实时快照及升级任务变化 |
+
+#### 请求和任务怎么结束
+
+普通 GET 和控制 POST 返回一个 JSON 响应后释放连接。`POST /update` 与 `POST /mcu/firmware` 在上传期间接收固定 `Content-Length` 的请求体，超过声明长度会拒绝。OTA 总上传期限为 1 小时，MCU 为 120 秒。两种上传连续约 30 秒收不到正文会取消本次上传并释放暂存资源。收到 `202` 后，后续安装由板载任务处理，可用返回的 `job` 通过 SSE 或状态 GET 跟踪。断开进度订阅不影响已受理的任务。
 
 ### SSH 管理
 
@@ -124,7 +128,7 @@ curl --unix-socket /run/y4-board/api.sock \
 
 ### 整机资源与实时事件
 
-Y4、Y12 都从内核 `/proc/stat` 和 `/proc/meminfo` 约每秒采样一次。GET 和所有 SSE 订阅者共享最新快照。
+Y4、Y12 都从内核 `/proc/stat` 和 `/proc/meminfo` 约每秒采样一次。整机资源 GET 和所有 SSE 订阅者共享最新快照。
 
 ```json
 {
@@ -149,7 +153,16 @@ curl --unix-socket /run/y4-board/api.sock http://localhost/api/v1/system/resourc
 curl -N --unix-socket /run/y4-board/api.sock http://localhost/api/v1/events
 ```
 
-SSE 响应以 `text/event-stream` 持续发送。连接后立即收到最新快照，此后每次发布一条同格式的消息。
+SSE 响应以 `text/event-stream` 持续发送。一条连接承载下列事件。订阅后依次提供各主题的最新快照，事件数据与对应 GET 使用相同的 JSON 结构。
+
+| 事件名 | 对应 GET | 发布节奏 |
+| --- | --- | --- |
+| `system-resources` | `/api/v1/system/resources` | 约每秒 |
+| `fan-status` | `/api/v1/fans` | 共享采样更新或读数失效时。Y12 另在 PWM 写后读回时更新 |
+| `temperature` | `/api/v1/temperature` | 采样更新或读数失效时 |
+| `slot-power` | `/api/v1/slot-power` | Y12 专属。状态、功耗或读数有效性变化时 |
+| `ota-status` | `/api/v1/update/status` | 任务阶段变化时。写盘进度至多约每秒更新，空闲状态仅在首次订阅或从其他状态进入时发送 |
+| `mcu-update` | `/api/v1/mcu/update` | 任务阶段变化时。helper 进度至多约每秒更新，空闲状态仅在首次订阅或从其他状态进入时发送 |
 
 ```text
 event: system-resources
@@ -157,9 +170,10 @@ data: {"schema":1,"device":"Y4","sampled_ms":124000,"cpu":null,"memory":null}
 
 ```
 
-- 读取 `system-resources` 事件的 JSON `data`。客户端可忽略将来增加的其他命名事件。重连会拿到当时的最新快照，流不提供历史回放。
-- SSE 独立提供两个订阅位置。超过上限返回 HTTP 503 `event_stream_limit`，客户端可以退避重连或暂时用普通 GET。单个订阅积压时最多暂存一条待发消息，后续追上最新采样。写入受阻约五秒会关闭该连接，释放位置。
-- 面板后端可复用一条 Unix socket 订阅连接，再把事件分发给已鉴权的网页连接。转发时按事件刷新并关闭代理缓冲，给上游设置响应头超时，连接期间避免整次响应总超时。页面关闭或会话被撤销时断开对应下游连接。
+- 客户端按 `event` 分派并解析 JSON `data`。可忽略以后增加的其他命名事件。每个主题只保留最新快照。重连后重新取得这些快照，无历史回放。
+- SSE 有独立的两个订阅位置。超过上限返回 HTTP 503 `event_stream_limit`。客户端可退避重连，期间使用普通 GET。一个订阅写入积压时，应用层只保留一帧待写消息，同时保留各主题的最新快照。该帧约五秒无法发出时释放连接。
+- OTA 发送端自行显示上传进度。`ota-status` 的字节计数对应系统槽和内核的写入进度。重启会中断连接，重连后用 `/api/v1/version` 核对系统版本与槽位。
+- 面板后端可复用一条 Unix socket 订阅连接，把事件按权限分发给已鉴权的网页连接。转发时按事件刷新并关闭代理缓冲，给上游设置响应头超时，连接期间避免整次响应总超时。页面关闭或会话被撤销时断开相应下游连接。
 
 ## 4. GET /api/v1/hardware —— 字段字典
 

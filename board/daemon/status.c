@@ -137,81 +137,161 @@ int y4_board_temperature_json(const struct y4_board_sample *s,char *out,size_t c
  return t.error?t.error:(int)t.used;
 }
 /* Resolve the hwmon device by DT node, never by hwmon allocation order. */
-static const char *const y12_fan_nodes[]={"pwm-fan-out0","pwm-fan-out2"};
+static const char *const y12_fan_nodes[] = {"pwm-fan-out0", "pwm-fan-out2"};
+static const unsigned y12_tach_groups[] = {1, 0, 0, 1, 0, 1};
+static const char *const y12_tach_attributes[] = {
+ "fan1_input", "fan1_input", "fan2_input", "fan2_input", "fan3_input", "fan3_input",
+};
 
-static int y12_fan_path(const char *node,const char *attribute,char *path,size_t cap)
+static int y12_fan_hwmon(const char *node, char *directory, size_t cap)
 {
  char pattern[160];
- glob_t matches={0};
- snprintf(pattern,sizeof pattern,"/sys/bus/platform/devices/%s/hwmon/hwmon*",node);
- int result=-ENODEV;
- if(!glob(pattern,0,NULL,&matches)&&matches.gl_pathc==1) {
-  int len=snprintf(path,cap,"%s/%s",matches.gl_pathv[0],attribute);
-  result=len>0&&(size_t)len<cap?0:-EOVERFLOW;
+ glob_t matches = {0};
+ snprintf(pattern, sizeof pattern, "/sys/bus/platform/devices/%s/hwmon/hwmon*", node);
+ int result = -ENODEV;
+ if (!glob(pattern, 0, NULL, &matches) && matches.gl_pathc == 1) {
+  size_t length = strlen(matches.gl_pathv[0]);
+  if (length >= cap)
+   result = -EOVERFLOW;
+  else {
+   memcpy(directory, matches.gl_pathv[0], length + 1);
+   result = 0;
+  }
  }
  globfree(&matches);
  return result;
 }
 
-static int y12_fan_read(const char *node,const char *attribute)
+static int y12_fan_path(const char *directory, const char *attribute,
+                        char *path, size_t cap)
+{
+ int length = snprintf(path, cap, "%s/%s", directory, attribute);
+ return length > 0 && (size_t)length < cap ? 0 : -EOVERFLOW;
+}
+
+static int y12_fan_read(const char *directory, const char *attribute)
 {
  char path[256];
- int error=y12_fan_path(node,attribute,path,sizeof path);
- if(error)return error;
- FILE *file=fopen(path,"r");
- if(!file)return -errno;
+ int error = y12_fan_path(directory, attribute, path, sizeof path);
+ if (error)
+  return error;
+ FILE *file = fopen(path, "re");
+ if (!file)
+  return -errno;
  int value;
- int result=fscanf(file,"%d",&value)==1&&value>=0?value:-EIO;
+ int result = fscanf(file, "%d", &value) == 1 && value >= 0 ? value : -EIO;
  fclose(file);
  return result;
 }
 
-int y12_board_set_fan(unsigned group,unsigned percent)
+void y12_board_fans_sample(struct y4_board_sample *sample)
 {
- if(strcmp(Y4_DEVICE_ID,"Y12"))return -EOPNOTSUPP;
- if(group>=2||percent>100)return -EINVAL;
- const char *node=y12_fan_nodes[group];
- char path[256];
- int error=y12_fan_path(node,"pwm1",path,sizeof path);
- if(error)return error;
- int raw=(int)((percent*255+50)/100);
- FILE *file=fopen(path,"w");
- if(!file)return -errno;
- int failed=fprintf(file,"%d\n",raw)<0;
- if(fclose(file)||failed)return -EIO;
- int actual=y12_fan_read(node,"pwm1");
- return actual<0?actual:actual==raw?0:-EIO;
+ struct y12_board_fan_sample *fans = &sample->y12_fans;
+ char directories[2][256];
+ int errors[2];
+ fans->sampled_ms = y4_board_now_ms();
+ for (unsigned i = 0; i < 2; i++) {
+  errors[i] = y12_fan_hwmon(y12_fan_nodes[i], directories[i], sizeof directories[i]);
+  fans->pwm_sampled_ms[i] = fans->sampled_ms;
+  fans->pwm_raw[i] = errors[i] ? errors[i] : y12_fan_read(directories[i], "pwm1");
+ }
+ for (unsigned i = 0; i < 6; i++) {
+  unsigned group = y12_tach_groups[i];
+  fans->rpm[i] = errors[group] ? errors[group] :
+                 y12_fan_read(directories[group], y12_tach_attributes[i]);
+ }
 }
 
-static int y12_fans_json(char *out,size_t cap)
+int y12_board_set_fan(unsigned group, unsigned percent, struct y4_board_sample *sample)
 {
- const char *const *nodes=y12_fan_nodes;
- static const unsigned group[]={1,0,0,1,0,1};
- static const char *const tach[]={
-  "fan1_input","fan1_input","fan2_input","fan2_input","fan3_input","fan3_input"
- };
- struct text t={.data=out,.cap=cap};
- put(&t,"{\"schema\":1,\"device\":\"Y12\",\"default_percent\":20,\"groups\":[");
- for(unsigned i=0;i<2;i++) {
-  int pwm=y12_fan_read(nodes[i],"pwm1");
-  put(&t,"%s{\"id\":\"%s\",\"pwm_raw\":",i?",":"",nodes[i]);
-  if(pwm>=0&&pwm<=255)put(&t,"%d",pwm);else put(&t,"null");
-  put(&t,"}");
+ if (strcmp(Y4_DEVICE_ID, "Y12"))
+  return -EOPNOTSUPP;
+ if (!sample || group >= 2 || percent > 100)
+  return -EINVAL;
+ char directory[256], path[256];
+ int error = y12_fan_hwmon(y12_fan_nodes[group], directory, sizeof directory);
+ if (error)
+  return error;
+ error = y12_fan_path(directory, "pwm1", path, sizeof path);
+ if (error)
+  return error;
+ int raw = (int)((percent * 255 + 50) / 100);
+ FILE *file = fopen(path, "we");
+ if (!file)
+  return -errno;
+ int failed = fprintf(file, "%d\n", raw) < 0;
+ if (fclose(file) || failed)
+  return -EIO;
+ int actual = y12_fan_read(directory, "pwm1");
+ if (actual < 0)
+  return actual;
+ if (actual != raw)
+  return -EIO;
+ sample->y12_fans.pwm_raw[group] = actual;
+ sample->y12_fans.pwm_sampled_ms[group] = y4_board_now_ms();
+ return 0;
+}
+
+void y12_board_fans_preserve_readback(const struct y4_board_sample *previous,
+                                      struct y4_board_sample *next)
+{
+ if (strcmp(Y4_DEVICE_ID, "Y12"))
+  return;
+ /* The monitor stamps the start of its read. It may report an older PWM
+  * after POST has already written and read back a newer one in the daemon. */
+ for (unsigned i = 0; i < 2; i++) {
+  uint64_t sampled = previous->y12_fans.pwm_sampled_ms[i];
+  if (sampled && sampled >= next->y12_fans.pwm_sampled_ms[i]) {
+   next->y12_fans.pwm_raw[i] = previous->y12_fans.pwm_raw[i];
+   next->y12_fans.pwm_sampled_ms[i] = sampled;
+  }
  }
- put(&t,"],\"fans\":[");
- for(unsigned i=0;i<6;i++) {
-  int rpm=y12_fan_read(nodes[group[i]],tach[i]);
-  put(&t,"%s{\"id\":\"FAN%u\",\"group\":\"%s\",\"rpm\":",i?",":"",i+1,nodes[group[i]]);
-  if(rpm>=0)put(&t,"%d",rpm);else put(&t,"null");
-  put(&t,"}");
+}
+
+static int y12_fan_fresh(uint64_t now, uint64_t sampled)
+{
+ return sampled && now >= sampled && now - sampled < 5000u;
+}
+
+static int y12_fans_json(const struct y4_board_sample *s, char *out, size_t cap)
+{
+ const struct y12_board_fan_sample *fans = &s->y12_fans;
+ uint64_t now = y4_board_now_ms(), sampled = fans->sampled_ms;
+ int fresh = s->magic == Y4_BOARD_SAMPLE_MAGIC && y12_fan_fresh(now, sampled);
+ uint64_t age = sampled && now >= sampled ? now - sampled : 0;
+ struct text t = {.data = out, .cap = cap};
+ put(&t, "{\"schema\":1,\"device\":\"Y12\",\"default_percent\":20,"
+         "\"sampled_ms\":%" PRIu64 ",\"age_ms\":%" PRIu64 ",\"fresh\":%s,\"groups\":[",
+     sampled, age, boolean(fresh));
+ for (unsigned i = 0; i < 2; i++) {
+  uint64_t pwm_sampled = fans->pwm_sampled_ms[i];
+  int pwm = fans->pwm_raw[i];
+  put(&t, "%s{\"id\":\"%s\",\"pwm_sampled_ms\":%" PRIu64 ",\"pwm_raw\":",
+      i ? "," : "", y12_fan_nodes[i], pwm_sampled);
+  if (y12_fan_fresh(now, pwm_sampled) && pwm >= 0 && pwm <= 255)
+   put(&t, "%d", pwm);
+  else
+   put(&t, "null");
+  put(&t, "}");
  }
- put(&t,"]}\n");
- return t.error?t.error:(int)t.used;
+ put(&t, "],\"fans\":[");
+ for (unsigned i = 0; i < 6; i++) {
+  unsigned group = y12_tach_groups[i];
+  put(&t, "%s{\"id\":\"FAN%u\",\"group\":\"%s\",\"rpm\":",
+      i ? "," : "", i + 1, y12_fan_nodes[group]);
+  if (fresh && fans->rpm[i] >= 0)
+   put(&t, "%d", fans->rpm[i]);
+  else
+   put(&t, "null");
+  put(&t, "}");
+ }
+ put(&t, "]}\n");
+ return t.error ? t.error : (int)t.used;
 }
 
 int y4_board_fans_json(const struct y4_board_sample *s,char *out,size_t cap) {
- if(!strcmp(Y4_DEVICE_ID,"Y12"))return y12_fans_json(out,cap);
  if(!s||!out||cap<256u)return -EINVAL;
+ if(!strcmp(Y4_DEVICE_ID,"Y12"))return y12_fans_json(s,out,cap);
  struct text t={out,cap,0,0};uint64_t now=y4_board_now_ms();
  int fresh=s->magic==Y4_BOARD_SAMPLE_MAGIC&&s->sampled_ms&&now>=s->sampled_ms&&now-s->sampled_ms<5000u;
  uint64_t age=s->sampled_ms&&now>=s->sampled_ms?now-s->sampled_ms:0;
