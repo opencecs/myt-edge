@@ -90,6 +90,7 @@ int y4_board_ota_admit(size_t);
 int y4_board_ota_write(const char *,size_t);
 int y4_board_ota_finish(void);
 void y4_board_ota_abort(void);
+void y4_board_ota_shutdown(void);
 void y4_board_ota_tick(void);
 int y4_board_ota_phase(void);
 int y4_board_ota_status_json(char *,size_t);

@@ -405,7 +405,7 @@ V11 自 MCU 0.1.43 起只配置 FAN3–FAN5。MCU 先建立 25 kHz、20% PWM，�
 | 大小上限 | 24 GiB（超出 413） |
 | 空间门槛 | `/data` 空闲 ≥ 包大小 + 256 MiB（不足 507） |
 | 接收时限 | 1 小时（超时 408 并丢弃未完成上传） |
-| 并发 | 同一时刻仅一个 OTA 任务（忙时 409） |
+| 并发 | 同一时刻仅一个 OTA 任务。Y4 的 MCU 上传、运行、取消处理中或写入结果待确认时，返回 409 `mcu_update_busy` |
 | 首启门 | 首启初始化未完成（initialization.completed=false）时 503 |
 | 成功 | `202` + 状态 JSON；之后轮询 `GET /api/v1/update/status` |
 
@@ -467,7 +467,7 @@ idle → accepted → open → verifying(验签) → manifest(门禁/旧布局�
 | 请求体 | 签名 MCU 固件包 |
 | 大小上限 | **1,049,736 字节**（超出 413） |
 | 时限 | 120 秒 |
-| 并发 | 固件任务与 OTA 独立；但 MCU 任务互斥（忙 409） |
+| 并发 | 同一时刻仅一个 MCU 任务。OTA 接收、校验、写入或等待重启期间，返回 409 `ota_update_busy` |
 | 空间 | /var/lib 状态目录需 ≥ 包大小 + 4 MiB；历史 firmware-*.bin ≥32 个时 507 |
 | 首启门 | 同 update（503） |
 
@@ -542,8 +542,7 @@ print(board_call("GET", "/api/v1/temperature"))
 ## 11. 已知边界
 
 - 无应用层鉴权：0600 套接字即边界；非 root 进程连不上（myt_desktop 为 root 服务可直连）
-- OTA 上传期间只读端点不受影响；OTA 暂存占用 `/data`，成功即删、失败保留（下次任务清理）
-- 上传中断（客户端断开）自动丢弃半成品文件，不留垃圾
+- OTA 上传期间只读端点继续响应。上传中断、校验或写入失败、以及升级成功后，均清理本次任务在 `/data` 的暂存包。失败详情仍可通过状态接口查询。若文件系统拒绝删除，下一次接收前重试清理。
 - Y4 的 MCU 固件早于 0.1.39 时，风扇策略写入返回 503 `fan_policy_unsupported`，硬件快照的 `policy.error=-95`
 - Y4 POST /api/v1/fans 执行期间（MCU flash 写入 ~1-4 s）MCU 的 I2C 会短暂阻塞：相邻 1-2 个采样周期可能出现 mcu 相关错误码，快照 5 s 窗口内自愈，风扇转速不受影响（硬件 PWM 自主运行）
 - Y4 三路 MCU 风扇策略存 MCU flash，rootfs OTA / 刷机 / 断电都不丢；只有再次 POST 才会改变

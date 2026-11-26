@@ -467,9 +467,14 @@ static int initialization_admission(void) {
  if(!e&&flock(lock,LOCK_EX|LOCK_NB))e=errno==EAGAIN||errno==EWOULDBLOCK?-EAGAIN:-errno;
  close(lock);return e;
 }
+/* Admission and the upload-to-helper handoff run in the same poll loop.
+ * Cancellation does not relinquish ownership until the child has exited. */
+static int mcu_update_busy(void) {
+ return upload_busy||job.pid>0||job.blocked;
+}
 static int upload_admit(struct client*c) {
  int ready=initialization_admission();if(ready)return ready;
- if(job.pid>0||job.blocked||upload_busy)return -EBUSY;
+ if(mcu_update_busy())return -EBUSY;
  DIR*d=opendir(Y4_BOARD_STATE);if(!d)return -errno;unsigned count=0;struct dirent*entry;
  while((entry=readdir(d)))if(!strncmp(entry->d_name,"firmware-",9)&&strstr(entry->d_name,".bin"))count++;
  closedir(d);if(count>=32u)return -ENOSPC;
@@ -727,6 +732,9 @@ static void route(struct client*c,char*header) {
   if(!length){error_response(c,413,-EFBIG,"package_size_rejected");return;}
   int ready=initialization_admission();
   if(ready){error_response(c,503,ready,"initialization_incomplete");return;}
+  if(!strcmp(Y4_DEVICE_ID,"Y4")&&mcu_update_busy()){
+   error_response(c,409,-EBUSY,"mcu_update_busy");return;
+  }
   int e=y4_board_ota_admit(length);
   if(e){error_response(c,e==-EBUSY?409u:e==-ENOSPC?507u:e==-EFBIG?413u:503u,e,"ota_admission_failed");return;}
   uint64_t now=y4_board_now_ms();
@@ -766,6 +774,7 @@ static void route(struct client*c,char*header) {
  }
  if(!have_length){error_response(c,411,-EINVAL,"content_length_required");return;}
  if(!length||length>Y4_BOARD_PACKAGE_LIMIT){error_response(c,413,-EFBIG,"package_size_rejected");return;}
+ if(y4_board_ota_busy()){error_response(c,409,-EBUSY,"ota_update_busy");return;}
  c->expected=length;
  int e=upload_admit(c);if(e){upload_error(c,e==-EBUSY?409u:e==-ENOSPC?507u:503u,e,"upload_admission_failed");return;}
  uint64_t now=y4_board_now_ms();
@@ -936,6 +945,7 @@ int main(int argc,char **argv) {
  if(socket_owned){struct stat current;if(!lstat(Y4_BOARD_SOCKET,&current)&&current.st_dev==socket_device&&current.st_ino==socket_inode)(void)unlink(Y4_BOARD_SOCKET);}
  for(unsigned i=0;i<CLIENTS;i++)client_close(&clients[i]);
  for(unsigned i=0;i<EVENT_CLIENTS;i++)event_close(&streams[i]);
+ y4_board_ota_shutdown();
  if(job.pid>0&&!job.cancel_requested){(void)kill(job.pid,SIGTERM);job.cancel_requested=1;strcpy(job.phase,"cancelling");job_save();}
  /* Do not abandon an active flash helper or claim its exit on a timeout. */
  while(job.pid>0){job_tick();struct timespec t={0,100000000};(void)nanosleep(&t,NULL);}

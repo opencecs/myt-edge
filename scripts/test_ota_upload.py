@@ -27,7 +27,7 @@ HARNESS = r"""
 
 enum fault {
   NONE, OPEN, MEMALIGN, DIGEST_NEW, DIGEST_INIT, DIGEST_UPDATE, WRITE_ZERO,
-  WRITE_ERROR, TRUNCATE, SYNC, CLOSE
+  WRITE_ERROR, TRUNCATE, SYNC, CLOSE, UNLINK
 };
 static enum fault fault;
 static int file_exists, fd_open;
@@ -75,6 +75,7 @@ static int fake_close(int fd) {
 static int fake_unlink(const char *path) {
   assert(!strncmp(path, "/data/y4-board/ota/", strlen("/data/y4-board/ota/")));
   assert(file_exists && !fd_open && !digest && !stage);
+  if (fault == UNLINK) { errno = EACCES; return -1; }
   file_exists = 0;
   return 0;
 }
@@ -227,7 +228,34 @@ int main(void) {
   assert(file_exists && file_bytes == sizeof part && y4_board_ota_phase() == OTA_OPEN);
   y4_board_ota_abort();
   assert(file_exists && y4_board_ota_busy() && y4_board_ota_phase() == OTA_OPEN);
-  puts("OTA upload failures release ownership and allow retry; accepted job stays owned.");
+  ota_fail(-EBADMSG);
+  failed(-EBADMSG);
+
+  assert(!y4_board_ota_admit(sizeof part));
+  assert(!y4_board_ota_write(part, sizeof part));
+  assert(!y4_board_ota_finish());
+  fault = UNLINK;
+  ota_fail(-EBADMSG);
+  clean_resources();
+  assert(file_exists && !y4_board_ota_busy() && ota.code == -EBADMSG);
+  assert(y4_board_ota_admit(sizeof part) == -EACCES);
+  assert(file_exists && ota.code == -EBADMSG);
+  fault = NONE;
+  assert(!y4_board_ota_admit(sizeof part));
+  assert(file_exists && file_bytes == 0u);
+  y4_board_ota_abort();
+  assert(!file_exists);
+
+  assert(!y4_board_ota_admit(sizeof part));
+  assert(!y4_board_ota_write(part, sizeof part));
+  assert(!y4_board_ota_finish());
+  y4_board_ota_shutdown();
+  y4_board_ota_shutdown();
+  clean_resources();
+  assert(!file_exists);
+
+  puts("OTA releases owned packages on upload/apply failure, abort and graceful exit.");
+  puts("Failed unlink preserves the original error and is retried before admission.");
 }
 """
 

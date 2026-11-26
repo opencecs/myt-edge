@@ -9,6 +9,7 @@ runtime files into a temporary chroot and creates synthetic procfs data.
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
+import errno
 import http.client
 import json
 import os
@@ -16,6 +17,7 @@ from pathlib import Path
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -25,6 +27,7 @@ RESOURCES = "/api/v1/system/resources"
 EVENTS = "/api/v1/events"
 VERSION = "/api/v1/version"
 OTA = "/api/v1/update"
+MCU = "/api/v1/mcu/firmware"
 BOOT_ID = "01234567-89ab-cdef-0123-456789abcdef"
 UPLOAD_LENGTH = 16  # shorter than even the OTA container header
 CPU_INITIAL = "cpu  100 20 30 600 30 0 0 0 12 2\n"
@@ -424,8 +427,8 @@ def check_slow_reader(path, board):
         print(f"{board}: slow subscriber released and healthy stream stayed open for {latest-before} ms")
 
 
-def send_upload(sock, body):
-    request = f"POST {OTA} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {UPLOAD_LENGTH}\r\n\r\n"
+def send_upload(sock, body, *, endpoint=OTA, length=UPLOAD_LENGTH):
+    request = f"POST {endpoint} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {length}\r\n\r\n"
     sock.sendall(request.encode() + body)
 
 
@@ -505,6 +508,74 @@ def check_upload_cleanup(root, path, board, idle_upload):
     print(f"{board}: OTA overrun (coalesced and fragmented), disconnect{timeout}, staging removal and readmission passed")
 
 
+def check_update_exclusion(root, path, board):
+    def mcu_stage(present):
+        for _ in range(40):
+            staged = list((root / "var/lib/y4-board").glob("firmware-*.bin"))
+            if len(staged) == int(present):
+                return
+            time.sleep(0.05)
+        raise AssertionError(f"unexpected MCU staging: {staged}")
+
+    if board == "Y4":
+        with connect(path) as mcu:
+            send_upload(mcu, b"x", endpoint=MCU)
+            mcu_stage(True)
+            with connect(path) as ota:
+                send_upload(ota, b"x")
+                status, error = read_reply(ota)
+                assert status == 409 and error["error"] == "mcu_update_busy", (status, error)
+            ota_state(root, path, False)
+        mcu_stage(False)
+
+    expected = (409, "ota_update_busy") if board == "Y4" else (503, "mcu_install_unavailable")
+    with connect(path) as ota:
+        send_upload(ota, b"x")
+        ota_state(root, path, True)
+        with connect(path) as mcu:
+            send_upload(mcu, b"x", endpoint=MCU)
+            status, error = read_reply(mcu)
+            assert (status, error["error"]) == expected, (status, error)
+        mcu_stage(False)
+    ota_state(root, path, False)
+    if board == "Y4":
+        with connect(path) as mcu:
+            send_upload(mcu, b"x", endpoint=MCU)
+            mcu_stage(True)
+        mcu_stage(False)
+    print(f"{board}: concurrent update admission and retry after disconnect passed")
+
+
+def check_rejected_ota_cleanup(root, path, board):
+    ota_dir = root / "data/y4-board/ota"
+    sentinel = ota_dir / "unrelated.y4pkg"
+    sentinel.write_bytes(b"retained fixture data")
+    key = root / "usr/share/y4-board/ota-public-key.bin"
+    key.parent.mkdir(parents=True, exist_ok=True)
+    # RFC 8032 public test key. The fixture signature below is deliberately invalid.
+    key.write_bytes(bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"))
+    manifest = json.dumps({"board": board, "type": "sysroot"}).encode()
+    magic = b"Y12PKG03" if board == "Y12" else b"Y4PKG001"
+    package = (struct.pack("<8sIIQ", magic, len(manifest), 64, 4096) + manifest + bytes(64))
+    package = package.ljust(4096, b"\0") + bytes(4096)
+
+    for _ in range(2):
+        with connect(path) as ota:
+            send_upload(ota, package, length=len(package))
+            status, accepted = read_reply(ota)
+            assert status == 202 and accepted["busy"], (status, accepted)
+        for _ in range(40):
+            status, result = get(path, OTA + "/status")
+            assert status == 200 and result["job"] == accepted["job"]
+            if not result["busy"]:
+                break
+            time.sleep(0.05)
+        assert result["phase"] == "failed" and result["status"] == -errno.EKEYREJECTED, result
+        assert result["bytes_written"] == result["kernel_bytes_written"] == 0, result
+        assert list(ota_dir.iterdir()) == [sentinel] and sentinel.read_bytes() == b"retained fixture data"
+    print(f"{board}: repeated OTA signature rejection removed only the current staging file")
+
+
 def check_release_metadata(path, firmware_version=None, manifest_readable=False):
     status, version = get(path, VERSION)
     assert status == 200 and version["schema"] == 1, (status, version)
@@ -567,6 +638,8 @@ def main():
                 with running_daemon(root, path, log) as daemon:
                     exercise(root, path, args.board)
                     check_upload_cleanup(root, path, args.board, args.idle_upload)
+                    check_update_exclusion(root, path, args.board)
+                    check_rejected_ota_cleanup(root, path, args.board)
                     if args.slow_reader:
                         check_slow_reader(path, args.board)
                     if args.board == "Y12":

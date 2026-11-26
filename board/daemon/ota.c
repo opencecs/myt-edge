@@ -456,11 +456,26 @@ static void ota_release(void) {
   ota.zin_buf = NULL;
 }
 
+/* The path is owned only after O_EXCL succeeds. Keep it on unlink failure
+ * so admission can retry cleanup before another package is staged. */
+static int remove_ota_package(void) {
+  if (!ota.package[0]) return 0;
+  if (unlink(ota.package) && errno != ENOENT) {
+    int e = -errno;
+    fprintf(stderr, "y4-board ota: failed to clean package job=%s status=%d\n", ota.id, e);
+    return e;
+  }
+  ota.package[0] = 0;
+  return 0;
+}
+
 static void ota_fail(int code) {
-  int during = (int)ota.state;
-  ota.code = code ? code : -EIO;
-  ota.state = OTA_FAILED;
+  int during = ota.state;
   ota_release();
+  (void)remove_ota_package();
+  ota.code = code ? code : -EIO;
+  ota.completed_ms = y4_board_now_ms();
+  ota.state = OTA_FAILED;
   fprintf(stderr, "y4-board ota: failed status=%d during state=%s\n", ota.code, state_name(during));
 }
 
@@ -1424,8 +1439,7 @@ static int release_upload(void) {
  * to the apply state machine. Discard it on every failure while still owned. */
 static void discard_upload(void) {
   (void)release_upload();
-  if (unlink(ota.package) && errno != ENOENT)
-    fprintf(stderr, "y4-board ota: failed to discard upload status=%d\n", -errno);
+  (void)remove_ota_package();
 }
 
 static int fail_upload(int error) {
@@ -1439,6 +1453,8 @@ static int fail_upload(int error) {
 int y4_board_ota_admit(size_t expected) {
   if (y4_board_ota_busy()) return -EBUSY;
   if (!expected || expected > OTA_LIMIT) return -EFBIG;
+  int cleanup = remove_ota_package();
+  if (cleanup) return cleanup;
   struct statvfs space;
   if (statvfs("/data", &space)) return -errno;
   if ((uint64_t)space.f_bavail * (uint64_t)space.f_frsize < expected + (256ULL << 20))
@@ -1452,10 +1468,17 @@ int y4_board_ota_admit(size_t expected) {
   ota.pkg_fd = ota.out_fd = ota.verify_fd = ota.k_fd = -1;
   for (unsigned i = 0; i < 16u; i++) (void)snprintf(ota.id + i * 2u, 3, "%02x", random[i]);
   if ((size_t)snprintf(ota.package, sizeof ota.package, "%s/%s.y4pkg", OTA_DIR, ota.id) >=
-      sizeof ota.package) return -ENAMETOOLONG;
+      sizeof ota.package) {
+    ota.package[0] = 0;
+    return -ENAMETOOLONG;
+  }
   ota_upload_fd = open(ota.package, O_WRONLY | O_CREAT | O_EXCL | O_DIRECT | O_CLOEXEC, 0600);
   if (ota_upload_fd < 0) ota_upload_fd = open(ota.package, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
-  if (ota_upload_fd < 0) return -errno;
+  if (ota_upload_fd < 0) {
+    int e = -errno;
+    ota.package[0] = 0;
+    return e;
+  }
   ota.started_ms = y4_board_now_ms();
   ota.state = OTA_ACCEPTED;
   if (posix_memalign((void **)&ota_upload_stage, 4096, OTA_IO_CHUNK))
@@ -1526,6 +1549,12 @@ void y4_board_ota_abort(void) {
   ota.state = OTA_IDLE;
 }
 
+void y4_board_ota_shutdown(void) {
+  (void)release_upload();
+  ota_release();
+  (void)remove_ota_package();
+}
+
 /* Advance the apply machine. Called from the daemon poll loop; every call is
  * bounded (16 MiB of payload or one fast step). */
 void y4_board_ota_tick(void) {
@@ -1577,22 +1606,8 @@ void y4_board_ota_tick(void) {
         e = step_grubenv();
         if (!e) {
           sync();
-          /* The uploaded package is disposable once the slot is written and
-           * verified. Delete it and any older uploads to keep /data from
-           * filling up across repeated updates (7.3 GB per package). */
-          unlink(ota.package);
-          DIR *dir = opendir(OTA_DIR);
-          if (dir) {
-            struct dirent *entry;
-            while ((entry = readdir(dir))) {
-              if (entry->d_name[0] == '.') continue;
-              char stale[PATH_MAX];
-              if ((size_t)snprintf(stale, sizeof stale, "%s/%s", OTA_DIR, entry->d_name) < sizeof stale)
-                (void)unlink(stale);
-            }
-            closedir(dir);
-          }
           ota_release();
+          (void)remove_ota_package();
           ota.state = OTA_READY;
           /* Let the API publish readiness before dispatching the reboot. */
           return;
