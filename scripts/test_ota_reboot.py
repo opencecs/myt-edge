@@ -3,7 +3,7 @@
 
 Requires a host C compiler and pkg-config gio-2.0, already used by y4-boardd.
 No system/session D-Bus connection is opened and no reboot is requested.
-Only request_reboot() is extracted; transport calls are intercepted, while
+Only y4_board_request_reboot() is extracted; transport calls are intercepted, while
 GVariant encoding/type checks, GError allocation and GObject cleanup use GLib.
 --source allows a negative control against an earlier or mutated ota.c.
 
@@ -155,7 +155,7 @@ static void run_case(enum scenario test) {
   bus_object = NULL;
   reply_object = NULL;
 
-  int result = request_reboot();
+  int result = y4_board_request_reboot();
   assert(bus_calls == 1);
   if (test == BUS_ERROR || test == BUS_NO_ERROR) {
     assert(result == -ENOSYS);
@@ -172,7 +172,7 @@ static void run_case(enum scenario test) {
 int main(void) {
   for (int test = SUCCESS; test <= WRONG_REPLY_TYPE; test++)
     run_case(test);
-  puts("OTA actual request_reboot: 8 cases passed (message, variants, errors, cleanup)");
+  puts("Actual y4_board_request_reboot: 8 cases passed (message, variants, errors, cleanup)");
   return 0;
 }
 """
@@ -184,7 +184,11 @@ def main():
                         default=ROOT / "board/daemon/ota.c")
     args = parser.parse_args()
     source = args.source.read_text()
-    start = source.index("static int request_reboot(void)")
+    symbol = "int y4_board_request_reboot(void)"
+    legacy = "static int request_reboot(void)"
+    if symbol not in source:
+        source = source.replace(legacy, symbol, 1)
+    start = source.index(symbol)
     function = source[start:source.index("static void ota_release(void)", start)]
     flags = shlex.split(subprocess.check_output(
         ["pkg-config", "--cflags", "--libs", "gio-2.0"], text=True))

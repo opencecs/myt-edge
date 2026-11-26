@@ -13,11 +13,18 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 RUN = Path("/run/y4-board")
 STATE = Path("/var/lib/y4-board")
+STATE_LAYOUT = Path("/etc/y4-board/mcu-state-shared")
+STATE_READY = Path("/run/y4-data-provision/y4-board-ready")
+DATA = Path("/data")
+STATE_MARKER = ".mcu-state-v1"
+STATE_FORMAT = b"y4-mcu-state v1\n"
+BOOT_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 ASSETS = Path("/usr/share/y4-board")
 HELPER = "/usr/libexec/y4-board/y4-board-boot-helper"
 MCU = "/usr/libexec/y4-board/y4-mcu-maintain"
@@ -130,7 +137,7 @@ def atomic_json(path, value):
 
 def boot_id():
     value = read_data(Path("/proc/sys/kernel/random/boot_id"), 64).decode("ascii").strip()
-    if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value):
+    if not BOOT_ID.fullmatch(value):
         raise BootError(-errno.EBADMSG, "boot_identity", "invalid kernel boot ID")
     return value
 
@@ -265,6 +272,166 @@ def sequence(value):
 def package_hash(path):
     return hashlib.sha256(read_data(path, 1049736)).hexdigest()
 
+def mcu_record(directory, name, pending_only=False):
+    try:
+        receipt = read_json(directory / name, 4096)
+    except FileNotFoundError:
+        return None
+    if type(receipt.get("schema")) is not int or receipt["schema"] != 1:
+        raise ValueError("MCU receipt schema")
+    if pending_only:
+        phase = receipt.get("phase")
+        blocked = receipt.get("blocked", False)
+        if type(blocked) is not bool or not isinstance(phase, str):
+            raise ValueError("MCU job state")
+        integer(receipt.get("status"), -4095, 0)
+        if not blocked and phase in ("complete", "cancelled", "failed", "recovery_verified"):
+            return None
+
+    job = receipt.get("job")
+    package = receipt.get("package")
+    digest = receipt.get("sha256")
+    if not isinstance(job, str) or not re.fullmatch(r"[0-9a-f]{32}", job) or package != f"firmware-{job}.bin":
+        raise ValueError("MCU receipt package identity")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("MCU receipt digest")
+    if not pending_only:
+        sequence(receipt.get("sequence"))
+    content = read_data(directory / package, 1049736)
+    if not content or hashlib.sha256(content).hexdigest() != digest:
+        raise ValueError("MCU package does not match its receipt")
+    return receipt, content
+
+
+def verify_migrated_package(path, root, receipt):
+    # A prior slot may have a different host compatibility version. Use its
+    # validated version as data and always run this image's read-only verifier.
+    host_file = root / "etc/y4-board/host-version"
+    host = read_data(host_file, 64).decode("ascii").strip()
+    if not re.fullmatch(r"[A-Za-z0-9.+-]{1,63}", host):
+        raise ValueError("legacy MCU host version")
+    executable(MCU)
+    checked = subprocess.run(
+        [MCU, "--verify-only", "--package", str(path), "--key", str(ASSETS / "mcu-public-key.bin"),
+         "--host-version", host, "--sequence-floor", str(receipt["sequence"])],
+        check=True, stdout=subprocess.PIPE, timeout=15,
+    )
+    result = decode_json(checked.stdout)
+    if (result.get("completed") is not True or result.get("package_verified") is not True
+            or result.get("metadata_only") is not True
+            or sequence(result.get("sequence")) != receipt["sequence"]):
+        raise ValueError("legacy MCU receipt does not match the signed package")
+
+
+def check_shared_mcu_state(destination):
+    os.close(trusted_dir(destination, 0o700))
+    if read_data(destination / STATE_MARKER, 32) != STATE_FORMAT:
+        raise ValueError("invalid shared MCU state marker")
+    mcu_record(destination, "active.json")
+    pending = mcu_record(destination, "update.json", pending_only=True)
+    return pending[0] if pending is not None else False
+
+
+def collect_legacy_mcu_state(roots, snapshot, verify):
+    active = pending = None
+    seen = {}
+    for root in roots:
+        directory = root / "var/lib/y4-board"
+        try:
+            os.close(trusted_dir(directory, 0o700))
+        except FileNotFoundError:
+            continue
+        candidate = mcu_record(directory, "active.json")
+        if candidate is not None:
+            receipt, content = candidate
+            # Verify the same bytes that will be copied, even if the original
+            # file has been replaced between reading and verification.
+            atomic(snapshot, content)
+            verify(snapshot, root, receipt)
+            floor, digest = receipt["sequence"], receipt["sha256"]
+            if seen.setdefault(floor, digest) != digest:
+                raise ValueError("legacy MCU slots disagree at the same signed sequence")
+            if active is None or floor > active[0]["sequence"]:
+                active = candidate
+        candidate = mcu_record(directory, "update.json", pending_only=True)
+        if candidate is not None:
+            if pending is not None and candidate != pending:
+                raise ValueError("legacy MCU slots record different unsettled updates")
+            pending = candidate
+    return active, pending
+
+
+def seed_shared_mcu_state(parent, roots, verify):
+    destination = parent / "state"
+    index = parent / STATE_MARKER
+    try:
+        indexed = read_data(index, 32)
+    except FileNotFoundError:
+        indexed = None
+    if indexed not in (None, STATE_FORMAT):
+        raise ValueError("invalid shared MCU state index")
+    try:
+        destination.lstat()
+    except FileNotFoundError:
+        if indexed is not None:
+            raise ValueError("previously initialized shared MCU state is missing")
+    else:
+        check_shared_mcu_state(destination)
+        if indexed is None:
+            atomic(index, STATE_FORMAT)
+        return
+
+    # The full directory is published together or the legacy state stays in
+    # place. The shared directory is never replaced after it has been created.
+    with tempfile.TemporaryDirectory(prefix=".mcu-state-new-", dir=parent) as work:
+        work = Path(work)
+        active, pending = collect_legacy_mcu_state(roots, work / "verify.bin", verify)
+        staged = work / "state"
+        private_dir(staged)
+        if active is not None:
+            receipt, content = active
+            atomic(staged / receipt["package"], content)
+            atomic_json(staged / "active.json", receipt)
+        if pending is not None:
+            receipt, content = pending
+            path = staged / receipt["package"]
+            if path.exists() and read_data(path, 1049736) != content:
+                raise ValueError("legacy MCU packages share a name with different content")
+            atomic(path, content)
+            atomic_json(staged / "update.json", dict(receipt, phase="interrupted_unknown",
+                                                    status=-errno.EINPROGRESS, blocked=True))
+        atomic(staged / STATE_MARKER, STATE_FORMAT)
+        staged.rename(destination)
+        # Publishing the index also fsyncs the directory after the rename.
+        atomic(index, STATE_FORMAT)
+
+
+def migrate_mcu_state(data, roots, verify=verify_migrated_package):
+    """Import firmware state once while both root slots are quiescent."""
+    parent = data / "y4-board"
+    private_dir(parent)
+    lease = trusted_dir(parent, 0o700)
+    try:
+        fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        seed_shared_mcu_state(parent, roots, verify)
+    finally:
+        os.close(lease)
+
+
+def shared_mcu_pending():
+    try:
+        STATE_LAYOUT.lstat()
+    except FileNotFoundError:
+        return None  # The board package still supports existing standalone installations.
+    if (read_data(STATE_LAYOUT, 32) != STATE_FORMAT
+            or read_data(STATE_READY, 16) != b"ready\n"
+            or not DATA.is_mount()
+            or not STATE.samefile(DATA / "y4-board/state")
+            or os.statvfs(STATE).f_flag & os.ST_RDONLY):
+        raise ValueError("shared MCU state is not mounted")
+    return check_shared_mcu_state(STATE)
+
+
 def select_package():
     directory = trusted_dir(ASSETS)
     os.close(directory)
@@ -279,27 +446,16 @@ def select_package():
     if package_hash(chosen) != expected:
         raise BootError(-errno.EBADMSG, "package", "builtin package hash mismatch")
     selection = "builtin"
-    try:
-        active = read_json(STATE / "active.json")
-    except FileNotFoundError:
-        active = None
+    active = mcu_record(STATE, "active.json")
     if active is not None:
-        if active.get("schema") != 1:
-            raise ValueError("active schema")
-        active_sequence = sequence(active.get("sequence"))
-        name = active.get("package")
-        active_hash = active.get("sha256")
-        if not isinstance(name, str) or not re.fullmatch(r"firmware-[0-9a-f]{32}\.bin", name):
-            raise ValueError("active filename")
-        if not isinstance(active_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", active_hash):
-            raise ValueError("active hash")
-        active_path = STATE / name
-        if package_hash(active_path) != active_hash:
-            raise BootError(-errno.EBADMSG, "package", "active package hash mismatch; no fallback")
+        receipt, _ = active
+        active_sequence = receipt["sequence"]
+        active_hash = receipt["sha256"]
         if active_sequence == floor and active_hash != expected:
             raise BootError(-errno.EBADMSG, "package", "conflicting packages at equal sequence")
         if active_sequence >= floor:
-            chosen, expected, floor, selection = active_path, active_hash, active_sequence, "active"
+            chosen = STATE / receipt["package"]
+            expected, floor, selection = active_hash, active_sequence, "active"
     key = ASSETS / "mcu-public-key.bin"
     if len(read_data(key, 32)) != 32:
         raise ValueError("key length")
@@ -636,6 +792,24 @@ class Initializer:
             self.counter["phase"] = "unknown"
             self.persist()
             return self.finish(-errno.EOWNERDEAD, unknown=True)
+        if state == "interrupted":
+            return self.interrupted()
+        try:
+            pending_mcu = shared_mcu_pending()
+        except (OSError, ValueError, UnicodeError, BootError) as error:
+            self.state.update(mcu_state_error=str(error), mcu_state_ready=False, mcu_retry_blocked=True)
+            return self.finish(-errno.EOWNERDEAD)
+        if pending_mcu is not None:
+            self.state["mcu_state_ready"] = True
+            if pending_mcu:
+                pending_boot = pending_mcu.get("boot_id")
+                if (not isinstance(pending_boot, str) or not BOOT_ID.fullmatch(pending_boot)
+                        or pending_boot == self.boot):
+                    self.state["mcu_retry_blocked"] = True
+                    return self.finish(-errno.EOWNERDEAD)
+                # A different validated boot ID means the old writer exited.
+                # Keep its receipt for the daemon to resolve after live checks.
+                self.state["mcu_recovery"] = True
         if state == "complete":
             try:
                 previous = read_json(RUN / "initialization.json")
@@ -645,8 +819,6 @@ class Initializer:
                 pass
             terminal = integer(self.counter.get("status"), -4095, 0)
             return self.finish(terminal)
-        if state == "interrupted":
-            return self.interrupted()
         if self.counter.get("mcu_retry_blocked", False) is True:
             self.state["mcu_retry_blocked"] = True
             return self.finish(integer(self.counter["status"], -4095, -1))
@@ -880,6 +1052,13 @@ def main():
     y12 = is_y12_board()
     if len(sys.argv) == 2 and sys.argv[1] == "--ready":
         return ready()
+    if len(sys.argv) in (4, 5) and sys.argv[1] == "--migrate-mcu-state" and not os.geteuid():
+        try:
+            migrate_mcu_state(Path(sys.argv[2]), tuple(map(Path, sys.argv[3:])))
+        except (OSError, ValueError, UnicodeError, BootError, subprocess.SubprocessError) as error:
+            print(f"MCU state migration failed: {error}", file=sys.stderr)
+            return 1
+        return 0
     if len(sys.argv) != 1 or os.geteuid():
         print("Usage: y4-board-boot [--ready] (root required)", file=sys.stderr)
         return 2

@@ -22,7 +22,7 @@ previous_mounted=no
 data_mounted=no
 '''
 CLEANUP=SOURCE[SOURCE.index('cleanup() {'):SOURCE.index('# BEGIN desktop-state helpers')]
-MOCKS='''desktop_previous_slot() { desktop_old_device=$TEST_OLD_DEVICE; }
+MOCKS='''find_previous_slot() { previous_device=$TEST_OLD_DEVICE; }
 mount() {
     test "$*" = "-t ext4 -o ro,noload $TEST_OLD_DEVICE $state/previous-slot" || exit 91
     echo "mount ro,noload" >> "$TEST_LOG"
@@ -238,10 +238,10 @@ desktop_fake_block() { test "$1" = /dev/fakep2 || test "$1" = /dev/fakep3; }
 readlink() { echo "$2"; }
 blkid() { echo "$TEST_FS_TYPE"; }
 dumpe2fs() { printf 'Filesystem state: %s\nFilesystem features: %s\n' "$TEST_FS_STATE" "$TEST_FS_FEATURES"; }
-desktop_previous_slot
-printf 'SELECTED=%s\n' "$desktop_old_device"
+find_previous_slot
+printf 'SELECTED=%s\n' "$previous_device"
 '''
-        r=subprocess.run(['/bin/dash','-c',PREFIX+FUNCS.replace('[ -b "$desktop_old_device" ]', 'desktop_fake_block "$desktop_old_device"')+mocks],env=self.env,text=True,capture_output=True)
+        r=subprocess.run(['/bin/dash','-c',PREFIX+FUNCS.replace('[ -b "$previous_device" ]', 'desktop_fake_block "$previous_device"')+mocks],env=self.env,text=True,capture_output=True)
         self.assertEqual(r.returncode==0,ok,r.stdout+r.stderr)
         if not ok: self.assertIn("FAIL:",r.stderr)
         return r.stdout

@@ -3,6 +3,7 @@
 #include "board_daemon.h"
 #include "ssh_api.h"
 #include "resources.h"
+#include "y4_grubenv.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -36,6 +37,7 @@
 #define UPLOAD_TIME_MS 120000u
 #define OTA_UPLOAD_TIME_MS 3600000u
 #define UPLOAD_IDLE_MS 30000u
+#define SLOT_MAINTENANCE_INTERVAL_MS 1000u
 #define HELPER_OVERDUE_MS 600000u
 #define FANS_BODY_LIMIT 512u
 #define SSH_REPLY_TIMEOUT_MS 60000u
@@ -78,7 +80,7 @@ struct update_job {
  pid_t pid;
  int code,verified,overdue,cancel_requested,blocked;
  uint64_t started_ms,completed_ms,sequence;
- char id[33],name[64],path[PATH_MAX],sha256[65],phase[40],version[32],uid[25];
+ char id[33],name[64],path[PATH_MAX],sha256[65],phase[40],version[32],uid[25],boot_id[37];
  char status_path[PATH_MAX],log_path[PATH_MAX];
 };
 static int upload_busy;
@@ -93,7 +95,7 @@ static struct event_value event_values[EVENT_TOPIC_COUNT];
 static uint64_t resource_next,event_next,telemetry_sampled_ms,mcu_event_started_ms,ota_phase_generation;
 static int telemetry_fresh,fan_event_dirty,ota_event_phase=-1;
 static unsigned y12_fan_fresh_mask;
-static char mcu_event_phase[sizeof job.phase];
+static char mcu_event_phase[sizeof job.phase],current_boot_id[37];
 static void stop(int sig){(void)sig;y4_board_stopping=1;}
 static int valid_hex(const char *s,size_t n) {
  if(strlen(s)!=n)return 0;
@@ -122,21 +124,33 @@ static int secure_lock(const char *name) {
  if(!e&&flock(fd,LOCK_EX|LOCK_NB))e=-errno;
  if(e){close(fd);return e;}return fd;
 }
+static void load_boot_id(void) {
+ char text[64];size_t length=0;
+ if(y4_board_read_file("/proc/sys/kernel/random/boot_id",text,sizeof text,&length))return;
+ while(length&&(text[length-1u]=='\n'||text[length-1u]=='\r'))text[--length]=0;
+ if(y4_boot_id_valid(text))memcpy(current_boot_id,text,sizeof current_boot_id);
+}
 static int job_save(void) {
  char json[1800];
  int n=snprintf(json,sizeof json,
  "{\"schema\":1,\"job\":\"%s\",\"phase\":\"%s\",\"status\":%d,\"verified\":%s,"
  "\"overdue\":%s,\"cancel_requested\":%s,\"blocked\":%s,\"started_ms\":%" PRIu64 ","
- "\"completed_ms\":%" PRIu64 ",\"sequence\":%" PRIu64 ",\"package\":\"%s\",\"sha256\":\"%s\",\"version\":\"%s\",\"uid\":\"%s\"}\n",
+ "\"completed_ms\":%" PRIu64 ",\"sequence\":%" PRIu64 ",\"package\":\"%s\",\"sha256\":\"%s\",\"version\":\"%s\",\"uid\":\"%s\",\"boot_id\":\"%s\"}\n",
  job.id,job.phase,job.code,job.verified?"true":"false",job.overdue?"true":"false",
  job.cancel_requested?"true":"false",job.blocked?"true":"false",job.started_ms,job.completed_ms,job.sequence,
- job.name,job.sha256,job.version,job.uid);
+ job.name,job.sha256,job.version,job.uid,job.boot_id);
  if(n>0&&(size_t)n<sizeof json) {
   int e=y4_board_atomic_file(Y4_BOARD_STATE,"update.json",json,(size_t)n,0600);
   if(e)fprintf(stderr,"y4-board update receipt persistence failed status=%d\n",e);
   return e;
  }
  return -EOVERFLOW;
+}
+static void job_unknown(int error) {
+ job.blocked=1;
+ job.code=error;
+ strcpy(job.phase,"interrupted_unknown");
+ (void)job_save();
 }
 static int job_restore(void) {
  char text[4096];int e=y4_board_read_file(Y4_BOARD_STATE "/update.json",text,sizeof text,NULL);
@@ -148,6 +162,12 @@ static int job_restore(void) {
  y4_board_json_number(text,"status",&status)||status>0||status< -4095)return -EBADMSG;
  job.code=(int)status;
  (void)y4_board_json_bool(text,"verified",&job.verified);
+ (void)y4_board_json_bool(text,"cancel_requested",&job.cancel_requested);
+ e=y4_board_json_string(text,"boot_id",job.boot_id,sizeof job.boot_id);
+ if(e&&e!=-ENODATA)return e;
+ if(*job.boot_id&&!y4_boot_id_valid(job.boot_id))return -EBADMSG;
+ e=y4_board_json_bool(text,"blocked",&job.blocked);
+ if(e&&e!=-ENODATA)return e;
  (void)y4_board_json_unsigned(text,"sequence",&job.sequence);
  if(y4_board_json_string(text,"package",job.name,sizeof job.name)||strchr(job.name,'/')||
  strncmp(job.name,"firmware-",9)||strlen(job.name)!=45u||strcmp(job.name+41,".bin"))return -EBADMSG;
@@ -159,24 +179,45 @@ static int job_restore(void) {
  if(path_format(job.path,sizeof job.path,Y4_BOARD_STATE,job.name))return -ENAMETOOLONG;
  char name[80];(void)snprintf(name,sizeof name,"update-%s.json",job.id);
  if(path_format(job.status_path,sizeof job.status_path,Y4_BOARD_RUNTIME,name))return -ENAMETOOLONG;
- if(!strcmp(job.phase,"accepted")||!strcmp(job.phase,"running")||!strcmp(job.phase,"cancelling")||
-    !strcmp(job.phase,"overdue")||!strcmp(job.phase,"interrupted_unknown")) {
-  strcpy(job.phase,"interrupted_unknown");job.code=-EINPROGRESS;job.blocked=1;job_save();
+ if(job.blocked||!strcmp(job.phase,"accepted")||!strcmp(job.phase,"running")||
+    !strcmp(job.phase,"cancelling")||!strcmp(job.phase,"overdue")||
+    !strcmp(job.phase,"interrupted_unknown")) {
+  if(!*job.boot_id)memcpy(job.boot_id,current_boot_id,sizeof job.boot_id);
+  int error=!strcmp(job.phase,"interrupted_unknown")&&job.code?job.code:-EOWNERDEAD;
+  job_unknown(error);
  }
  return 0;
 }
-static int helper_result(void) {
+/* A reaped process ends ownership only with evidence that the MCU was
+ * restored, and that any erase was followed by verified flash readback. */
+static int helper_result(int wait_status,int *settled) {
+ if(!WIFEXITED(wait_status))return -EOWNERDEAD;
  char text[8192],phase[40];int e=y4_board_read_file(job.status_path,text,sizeof text,NULL);if(e)return e;
- long long schema=0,status=0;int completed=0,verified=0,safe=0;
+ long long schema=0,status=0;
+ int completed=0,restored=0,safe=0,erased=0,readback=0,verified=0,recovery=0;
  if(y4_board_json_number(text,"schema",&schema)||schema!=1||
- y4_board_json_number(text,"status",&status)||status>0||status< -4095||
- y4_board_json_bool(text,"completed",&completed)||!completed||
- y4_board_json_bool(text,"verified",&verified)||!verified||
- y4_board_json_bool(text,"safe_for_network",&safe)||!safe||status)return status<0?(int)status:-EPROTO;
- if(y4_board_json_unsigned(text,"sequence",&job.sequence)||
-    y4_board_json_string(text,"uid",job.uid,sizeof job.uid)||!uid_valid(job.uid)||
-    y4_board_json_string(text,"version",job.version,sizeof job.version)||!version_valid(job.version))return -EPROTO;
- if(y4_board_json_string(text,"phase",phase,sizeof phase)||(strcmp(phase,"complete")&&strcmp(phase,"kept")))return -EPROTO;
+    y4_board_json_number(text,"status",&status)||status>0||status< -4095||
+    y4_board_json_bool(text,"completed",&completed)||!completed||
+    y4_board_json_bool(text,"restored",&restored)||!restored||
+    y4_board_json_bool(text,"safe_for_network",&safe)||!safe||
+    y4_board_json_bool(text,"erase_attempted",&erased)||
+    y4_board_json_bool(text,"verified",&verified))return -EPROTO;
+ e=y4_board_json_bool(text,"recovery_probe",&recovery);
+ if(e&&e!=-ENODATA)return -EPROTO;
+ if(erased&&(y4_board_json_bool(text,"readback_verified",&readback)||!readback||
+             (recovery&&!verified)))return -EOWNERDEAD;
+ if(status){*settled=1;return (int)status;}
+ uint64_t sequence;
+ char uid[sizeof job.uid],version[sizeof job.version];
+ if(WEXITSTATUS(wait_status)||!verified||
+    y4_board_json_unsigned(text,"sequence",&sequence)||
+    y4_board_json_string(text,"uid",uid,sizeof uid)||!uid_valid(uid)||
+    y4_board_json_string(text,"version",version,sizeof version)||!version_valid(version)||
+    y4_board_json_string(text,"phase",phase,sizeof phase)||(strcmp(phase,"complete")&&strcmp(phase,"kept")))return -EPROTO;
+ job.sequence=sequence;
+ strcpy(job.uid,uid);
+ strcpy(job.version,version);
+ *settled=1;
  return 0;
 }
 static int active_publish(void) {
@@ -199,10 +240,11 @@ static void job_tick(void) {
  }
  if(got<0) {
   if(errno==EINTR)return;
-  job.blocked=1;job.code=-errno;job.pid=0;strcpy(job.phase,"interrupted_unknown");(void)job_save();return;
+  int e=-errno;job.pid=0;job_unknown(e);return;
  }
  job.pid=0;job.completed_ms=y4_board_now_ms();
- int e=WIFEXITED(status)&&WEXITSTATUS(status)==0?helper_result():-EIO;
+ int settled=0,e=helper_result(status,&settled);
+ if(!settled){job_unknown(e);return;}
  if(!e){job.verified=1;e=active_publish();strcpy(job.phase,e?"verified_unpublished":"complete");}
  else strcpy(job.phase,job.cancel_requested?"cancelled":"failed");
  job.code=e;job_save();
@@ -241,6 +283,7 @@ static int launch_helper(void) {
  (e=path_format(job.log_path,sizeof job.log_path,Y4_BOARD_STATE,log_name)))return e;
  int log=open(job.log_path,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);if(log<0)return -errno;
  /* Accepted receipt is durable before a helper can perform any hardware IO. */
+ memcpy(job.boot_id,current_boot_id,sizeof job.boot_id);
  job.started_ms=y4_board_now_ms();job.code=-EINPROGRESS;strcpy(job.phase,"accepted");
  e=job_save();if(e){close(log);return e;}
  pid_t parent=getpid(),pid=fork();
@@ -449,31 +492,61 @@ static void event_io(struct event_client *stream,short events,uint64_t now) {
  if(n>0)stream->sent+=(size_t)n;
  else if(n<0&&errno!=EAGAIN&&errno!=EWOULDBLOCK&&errno!=EINTR)event_close(stream);
 }
-static int initialization_admission(void) {
- char text[8192],current[64],recorded[40];size_t bytes=0;
+static int initialization_admission(int *mcu_restored) {
+ char text[8192],recorded[40];
  int e=y4_board_read_file(Y4_BOARD_INIT_STATUS,text,sizeof text,NULL);if(e)return e;
- int completed=0;if(y4_board_json_bool(text,"completed",&completed)||!completed)return -EAGAIN;
+ long long schema;
+ int completed=0,settled=0;
+ if(y4_board_json_number(text,"schema",&schema)||schema!=1)return -EPROTO;
+ if(y4_board_json_bool(text,"completed",&completed)||!completed||
+    y4_board_json_bool(text,"writers_settled",&settled)||!settled)return -EAGAIN;
  int retry_blocked=0;
  e=y4_board_json_bool(text,"mcu_retry_blocked",&retry_blocked);
  if(e&&e!=-ENODATA)return -EPROTO;
  if(retry_blocked)return -EOWNERDEAD;
  if(y4_board_json_string(text,"boot_id",recorded,sizeof recorded))return -EPROTO;
- e=y4_board_read_file("/proc/sys/kernel/random/boot_id",current,sizeof current,&bytes);if(e)return e;
- while(bytes&&(current[bytes-1u]=='\n'||current[bytes-1u]=='\r'))current[--bytes]=0;
- if(bytes!=36u||strcmp(recorded,current))return -ESTALE;
+ if(!*current_boot_id||strcmp(recorded,current_boot_id))return -ESTALE;
  int lock=open(Y4_BOARD_RUNTIME "/boot.lock",O_RDWR|O_NOFOLLOW|O_CLOEXEC);if(lock<0)return -errno;
  struct stat st;e=fstat(lock,&st)?-errno:0;
  if(!e&&(!S_ISREG(st.st_mode)||st.st_uid||st.st_nlink!=1u||(st.st_mode&07777u)!=0600u))e=-EPERM;
  if(!e&&flock(lock,LOCK_EX|LOCK_NB))e=errno==EAGAIN||errno==EWOULDBLOCK?-EAGAIN:-errno;
- close(lock);return e;
+ close(lock);
+ if(!e&&mcu_restored) {
+  int restored=0,safe=0;
+  *mcu_restored=!y4_board_json_bool(text,"mcu_restored",&restored)&&restored&&
+                 !y4_board_json_bool(text,"mcu_safe_for_network",&safe)&&safe;
+ }
+ return e;
 }
 /* Admission and the upload-to-helper handoff run in the same poll loop.
  * Cancellation does not relinquish ownership until the child has exited. */
 static int mcu_update_busy(void) {
  return upload_busy||job.pid>0||job.blocked;
 }
+/* An initialization receipt from the same boot predates this failure. A
+ * later boot can release the fence after maintenance and live MCU readback. */
+static void recover_mcu_job(uint64_t now) {
+ if(!job.blocked||strcmp(job.phase,"interrupted_unknown")||!*job.boot_id||
+    !*current_boot_id||!strcmp(job.boot_id,current_boot_id))return;
+ if(sample.magic!=Y4_BOARD_SAMPLE_MAGIC||sample.mcu_error||!sample.uid_valid||
+    !sample.sampled_ms||now<sample.sampled_ms||now-sample.sampled_ms>=5000u)return;
+ int restored=0;
+ if(initialization_admission(&restored)||!restored)return;
+ strcpy(job.phase,"recovery_verified");
+ job.blocked=0;
+ if(job_save()){
+  strcpy(job.phase,"interrupted_unknown");
+  job.blocked=1;
+ }
+}
+static int check_pending_slot(struct client *c) {
+ int pending=y4_board_slot_pending_reboot();
+ if(pending>0)error_response(c,409,-EBUSY,"slot_reboot_pending");
+ else if(pending<0)error_response(c,503,pending,"slot_state_unavailable");
+ return pending;
+}
 static int upload_admit(struct client*c) {
- int ready=initialization_admission();if(ready)return ready;
+ int ready=initialization_admission(NULL);if(ready)return ready;
  if(mcu_update_busy())return -EBUSY;
  DIR*d=opendir(Y4_BOARD_STATE);if(!d)return -errno;unsigned count=0;struct dirent*entry;
  while((entry=readdir(d)))if(!strncmp(entry->d_name,"firmware-",9)&&strstr(entry->d_name,".bin"))count++;
@@ -722,7 +795,12 @@ static void route(struct client*c,char*header) {
  }
  if(!strcmp(path,"/api/v1/update/confirm")) {
   if(length){error_response(c,400,-EINVAL,"confirm_body_unavailable");return;}
+  if(y4_board_ota_busy()){error_response(c,409,-EBUSY,"ota_update_busy");return;}
+  if(mcu_update_busy()){error_response(c,409,-EBUSY,"mcu_update_busy");return;}
+  int ready=initialization_admission(NULL);
+  if(ready){error_response(c,503,ready,"initialization_incomplete");return;}
   int e=y4_board_ota_confirm();
+  if(e==-EAGAIN){error_response(c,409,e,"slot_reboot_pending");return;}
   if(e){error_response(c,503,e,"confirm_failed");return;}
   char body[1024];int n=y4_board_ota_status_json(body,sizeof body);
   if(n<0)error_response(c,500,n,"response_overflow");else response(c,200,body);return;
@@ -730,11 +808,12 @@ static void route(struct client*c,char*header) {
  if(!strcmp(path,"/api/v1/update")) {
   if(!have_length){error_response(c,411,-EINVAL,"content_length_required");return;}
   if(!length){error_response(c,413,-EFBIG,"package_size_rejected");return;}
-  int ready=initialization_admission();
+  int ready=initialization_admission(NULL);
   if(ready){error_response(c,503,ready,"initialization_incomplete");return;}
   if(!strcmp(Y4_DEVICE_ID,"Y4")&&mcu_update_busy()){
    error_response(c,409,-EBUSY,"mcu_update_busy");return;
   }
+  if(check_pending_slot(c))return;
   int e=y4_board_ota_admit(length);
   if(e){error_response(c,e==-EBUSY?409u:e==-ENOSPC?507u:e==-EFBIG?413u:503u,e,"ota_admission_failed");return;}
   uint64_t now=y4_board_now_ms();
@@ -746,7 +825,7 @@ static void route(struct client*c,char*header) {
   if(!have_length){error_response(c,411,-EINVAL,"content_length_required");return;}
   if(!length||length>FANS_BODY_LIMIT){error_response(c,413,-E2BIG,"fans_body_too_large");return;}
   if(strcmp(Y4_DEVICE_ID,"Y12")) {
-   int ready=initialization_admission();
+   int ready=initialization_admission(NULL);
    if(ready){error_response(c,503,ready,"initialization_incomplete");return;}
   }
   c->expected=length;c->parsed=1;c->fans_post=1;
@@ -775,6 +854,7 @@ static void route(struct client*c,char*header) {
  if(!have_length){error_response(c,411,-EINVAL,"content_length_required");return;}
  if(!length||length>Y4_BOARD_PACKAGE_LIMIT){error_response(c,413,-EFBIG,"package_size_rejected");return;}
  if(y4_board_ota_busy()){error_response(c,409,-EBUSY,"ota_update_busy");return;}
+ if(check_pending_slot(c))return;
  c->expected=length;
  int e=upload_admit(c);if(e){upload_error(c,e==-EBUSY?409u:e==-ENOSPC?507u:503u,e,"upload_admission_failed");return;}
  uint64_t now=y4_board_now_ms();
@@ -859,8 +939,8 @@ int main(int argc,char **argv) {
  struct sigaction sa={.sa_handler=stop};sigemptyset(&sa.sa_mask);
  if(sigaction(SIGTERM,&sa,NULL)||sigaction(SIGINT,&sa,NULL)){close(lease);return 1;}
  if(signal(SIGPIPE,SIG_IGN)==SIG_ERR){close(lease);return 1;}
+ load_boot_id();
  e=job_restore();if(e){job.blocked=1;job.code=e;strcpy(job.phase,"receipt_invalid");}
- (void)y4_board_slot_boot_count();
  /* PCIe sampler is read-only and isolated from MCU and HTTP admission. */
  pid_t pcie=y4_board_pcie_start();if(pcie<0){fprintf(stderr,"y4-board pcie worker unavailable status=%ld\n",(long)pcie);pcie=0;}
  int channels[2];if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_NONBLOCK|SOCK_CLOEXEC,0,channels)){close(lease);return 1;}
@@ -877,9 +957,23 @@ int main(int argc,char **argv) {
  for(unsigned i=0;i<CLIENTS;i++)clients[i].fd=clients[i].upload_fd=-1;
  struct event_client streams[EVENT_CLIENTS];
  for(unsigned i=0;i<EVENT_CLIENTS;i++)streams[i]=(struct event_client){.fd=-1};
+ int slot_checked=0;
+ uint64_t slots_next=0;
  while(!y4_board_stopping) {
   job_tick();y4_board_ota_tick();(void)y4_board_pcie_tick(&pcie);
-  if(sample.magic==Y4_BOARD_SAMPLE_MAGIC)(void)y4_board_slot_confirm_tick(&sample);
+  uint64_t now=y4_board_now_ms();
+  if(now>=slots_next) {
+   slots_next=now+SLOT_MAINTENANCE_INTERVAL_MS;
+   recover_mcu_job(now);
+   int safe=!mcu_update_busy()&&!y4_board_ota_busy()&&!initialization_admission(NULL);
+   if(!slot_checked) {
+    int status=y4_board_slot_boot_count(safe);
+    if(!status)slot_checked=1;
+    else if(status!=-EAGAIN)
+     fprintf(stderr,"y4-board slot: boot check deferred status=%d\n",status);
+   }
+   if(safe&&slot_checked)(void)y4_board_slot_confirm_tick(&sample);
+  }
   if(monitor>0){int ws;pid_t got=waitpid(monitor,&ws,WNOHANG);
    if(got==monitor){monitor=0;fprintf(stderr,"y4-board monitor exited raw_status=%d; observations will expire\n",ws);}
    else if(got<0&&errno!=EINTR){monitor_unknown=1;fprintf(stderr,"y4-board monitor ownership lost pid=%ld status=%d\n",(long)monitor,-errno);monitor=0;}}
@@ -892,7 +986,7 @@ int main(int argc,char **argv) {
     }
    }
   }
-  uint64_t now=y4_board_now_ms();
+  now=y4_board_now_ms();
   resource_tick(now);
   struct pollfd fds[2+CLIENTS+EVENT_CLIENTS];fds[0]=(struct pollfd){server,POLLIN,0};fds[1]=(struct pollfd){monitor>0?channels[0]:-1,POLLIN,0};
   for(unsigned i=0;i<CLIENTS;i++)fds[i+2u]=(struct pollfd){clients[i].fd,clients[i].response?POLLOUT:clients[i].ssh_request?0:POLLIN,0};

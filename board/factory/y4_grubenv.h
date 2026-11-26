@@ -29,11 +29,15 @@ struct y4_slot_state {
   char boot_kernel_b[96];
   long boot_count;
   int boot_ok;
+  char boot_count_id[37]; /* Kernel boot UUID recorded with the trial count. */
+  int rollback_pending;  /* Selected target still needs an orderly reboot. */
 };
 
 /* Parse a 1024-byte environment block. Returns 0 on success, -EINVAL when
  * the signature or size is wrong. Missing keys leave fields unset. */
 int y4_grubenv_parse(const unsigned char *block, struct y4_slot_state *state);
+
+int y4_boot_id_valid(const char *id);
 
 /* Read + parse the environment file. Returns 0, -ENOENT or -EINVAL. */
 int y4_grubenv_read(const char *path, struct y4_slot_state *state);

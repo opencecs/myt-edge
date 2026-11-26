@@ -35,6 +35,18 @@ static const char *block_value(const unsigned char *block, const char *key) {
   return NULL;
 }
 
+int y4_boot_id_valid(const char *id) {
+  if (strlen(id) != 36) return 0;
+  for (size_t i = 0; i < 36; i++) {
+    if (i == 8 || i == 13 || i == 18 || i == 23) {
+      if (id[i] != '-') return 0;
+    } else if (!((id[i] >= '0' && id[i] <= '9') || (id[i] >= 'a' && id[i] <= 'f'))) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
 int y4_grubenv_parse(const unsigned char *block, struct y4_slot_state *state) {
   if (!block || !state ||
       memcmp(block, signature, strlen(signature)) ||
@@ -70,6 +82,16 @@ int y4_grubenv_parse(const unsigned char *block, struct y4_slot_state *state) {
   value = block_value(block, "boot_ok");
   if (value) { char *endp; long parsed = strtol(value, &endp, 10);
     if (!*endp && parsed >= 0 && parsed <= 1) state->boot_ok = (int)parsed; }
+  value = block_value(block, "boot_count_id");
+  if (value) {
+    if (!y4_boot_id_valid(value)) return -EINVAL;
+    memcpy(state->boot_count_id, value, sizeof state->boot_count_id);
+  }
+  value = block_value(block, "rollback_pending");
+  if (value) {
+    if (strcmp(value, "1") || !state->boot_ok || !state->boot_count_id[0]) return -EINVAL;
+    state->rollback_pending = 1;
+  }
   return 0;
 }
 
@@ -124,6 +146,19 @@ int y4_grubenv_render(const struct y4_slot_state *state, unsigned char *out) {
                    "boot_count=%ld\nboot_ok=%d\n", state->boot_count, state->boot_ok);
   if (k < 0 || (size_t)k >= sizeof body - (size_t)n) return -EOVERFLOW;
   n += k;
+  if (state->boot_count_id[0]) {
+    if (state->boot_count_id[sizeof state->boot_count_id - 1] ||
+        !y4_boot_id_valid(state->boot_count_id)) return -EINVAL;
+    k = snprintf(body + n, sizeof body - (size_t)n, "boot_count_id=%s\n", state->boot_count_id);
+    if (k < 0 || (size_t)k >= sizeof body - (size_t)n) return -EOVERFLOW;
+    n += k;
+  }
+  if (state->rollback_pending) {
+    if (!state->boot_ok || !state->boot_count_id[0]) return -EINVAL;
+    k = snprintf(body + n, sizeof body - (size_t)n, "rollback_pending=1\n");
+    if (k < 0 || (size_t)k >= sizeof body - (size_t)n) return -EOVERFLOW;
+    n += k;
+  }
   if ((size_t)n > Y4_GRUBENV_BYTES) return -EOVERFLOW;
   memset(out, '#', Y4_GRUBENV_BYTES);
   memcpy(out, body, (size_t)n);
@@ -145,8 +180,11 @@ static int write_one(const char *path, const unsigned char *block) {
   if (fsync(fd)) { int e = -errno; close(fd); unlink(tmp); return e; }
   if (close(fd)) { unlink(tmp); return -errno; }
   if (rename(tmp, path)) { int e = -errno; unlink(tmp); return e; }
-  /* Best effort: flush the directory entry so rename survives a reset. */
-  int dir = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  /* Best effort: flush the parent directory entry for the rename. */
+  char *slash = strrchr(tmp, '/');
+  if (slash && slash != tmp) *slash = 0;
+  const char *parent = !slash ? "." : slash == tmp ? "/" : tmp;
+  int dir = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
   if (dir >= 0) { (void)fsync(dir); close(dir); }
   return 0;
 }

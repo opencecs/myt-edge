@@ -1699,7 +1699,8 @@ class Builder:
               + "/data/containerd /var/lib/containerd none bind,nofail 0 0\n"
               + "/data/samba /var/lib/samba none bind,nofail 0 0\n"
               + "/data/nfs /var/lib/nfs none bind,nofail 0 0\n"
-              + "/data/myt_desktop /var/lib/myt_desktop none bind,nofail 0 0\n")
+              + "/data/myt_desktop /var/lib/myt_desktop none bind,nofail 0 0\n"
+              + "/data/y4-board/state /var/lib/y4-board none bind,nofail,x-systemd.requires=data.mount 0 0\n")
         for mount_point in ["data", "data/home", "data/root", "data/docker", "data/journal",
                             "home", "root", "var/lib/docker", "var/log/journal",
                             "var/lib/containerd", "var/lib/samba", "var/lib/nfs", "var/lib/myt_desktop"]:
@@ -1708,6 +1709,24 @@ class Builder:
         # the data partition stays unmounted (every entry is nofail) and the
         # system still boots to a reachable state - provisioning failure is
         # never allowed to isolate emergency.target.
+        # A failed bind can leave services using the underlying empty directory.
+        mcu_state_mount = self.fs / "var/lib/y4-board"
+        mcu_state_mount.mkdir(mode=0o700, parents=True, exist_ok=True)
+        mcu_state_mount.chmod(0o700)
+        shared_mcu = self.fs / "etc/y4-board/mcu-state-shared"
+        shared_mcu.parent.mkdir(parents=True, exist_ok=True)
+        shared_mcu.write_text("y4-mcu-state v1\n")
+        # Wait for the bind attempt without requiring it. The daemon and the
+        # initializer create their own private directory if the data is missing.
+        # Reset StateDirectory's implicit hard mount requirement in this image.
+        for service in ("y4-board-init.service", "y4-boardd.service"):
+            drop_in = self.fs / "etc/systemd/system" / (service + ".d")
+            drop_in.mkdir(parents=True, exist_ok=True)
+            mounts = r"var-lib-y4\x2dboard.mount"
+            if service == "y4-boardd.service":
+                mounts += " boot-efi.mount"
+            (drop_in / "30-shared-mcu-state.conf").write_text(
+                f"[Unit]\nWants={mounts}\nAfter={mounts}\n[Service]\nStateDirectory=\n")
         provision_drop = self.fs / "etc/systemd/system/data.mount.d"
         provision_drop.mkdir(parents=True, exist_ok=True)
         (provision_drop / "y4-order.conf").write_text(

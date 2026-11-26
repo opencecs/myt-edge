@@ -61,6 +61,29 @@ int main(void) {
     check(strstr((char *)block, "boot_count=3\n") != NULL, "count update rendered");
   }
 
+  /* The last boot UUID and recovery intent travel with the default entry. */
+  {
+    struct y4_slot_state pending = state;
+    const char *boot_id = "ad9cfe48-a7b8-40be-bbf9-2be652612ce0";
+    pending.boot_count = 0;
+    pending.boot_ok = 1;
+    pending.rollback_pending = 1;
+    memcpy(pending.boot_count_id, boot_id, sizeof pending.boot_count_id);
+    check(y4_grubenv_render(&pending, block) == 0, "render pending rollback");
+    struct y4_slot_state parsed;
+    parse_block(block, &parsed);
+    check(parsed.rollback_pending == 1 && !strcmp(parsed.boot_count_id, boot_id),
+          "pending rollback and boot UUID round trip");
+    check(parsed.default_entry == 1 && parsed.boot_ok && parsed.boot_count == 0,
+          "old boot keys coexist with pending keys");
+
+    pending.boot_count_id[0] = 0;
+    check(y4_grubenv_render(&pending, block) == -EINVAL, "pending rollback requires a boot UUID");
+    pending.rollback_pending = 0;
+    strcpy(pending.boot_count_id, "not-a-uuid");
+    check(y4_grubenv_render(&pending, block) == -EINVAL, "malformed UUID not written");
+  }
+
   /* A legacy block (old factory image): single key only. */
   {
     const char *legacy =
@@ -79,6 +102,8 @@ int main(void) {
           "legacy key parsed");
     check(parsed.have_boot_kernel_a == 0 && parsed.have_boot_kernel_b == 0,
           "no per-slot keys invented");
+    check(!parsed.boot_count_id[0] && !parsed.rollback_pending,
+          "legacy block has no trial UUID or rollback intent");
     /* Round trip must re-emit the legacy key unchanged: an old grub.cfg
      * keeps reading it. */
     check(y4_grubenv_render(&parsed, block) == 0, "render legacy block");

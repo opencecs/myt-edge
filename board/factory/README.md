@@ -30,6 +30,21 @@ selection is retained as a real failure; it is never quietly replaced with the
 older built-in selection. The native MCU helper revalidates signature, target,
 host compatibility and the selected inclusive sequence floor before hardware IO.
 
+Complete firmware images back this directory with `/data/y4-board/state`, so
+A/B system updates and boot rollback share the board's MCU selection. The first
+boot of an image with this layout validates the available old slots' records
+and signed packages, then imports the highest sequence. Matching sequences
+must have the same package digest. Source directories stay intact. A shared
+record takes precedence once the migration is complete.
+
+The migration also carries an unsettled MCU update into the shared state.
+The current boot never repeats an unknown write. A later boot can use the
+normal signed recovery checks, and the daemon only clears the unknown outcome
+after verifying the current MCU is operational. Missing mounts, invalid
+receipts and ambiguous slot records stop firmware writes and preserve the
+source records. Existing standalone board packages keep the original layout
+until a full system image opts into shared state.
+
 ## Attempts, ownership and ordering
 
 The root0700 /run/y4-board directory is preserved across service restarts.

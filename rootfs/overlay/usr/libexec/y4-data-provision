@@ -19,6 +19,7 @@ data_start_bytes=$(( (10 + 512 + 2 * 16 * 1024) * MIB ))
 
 state=/run/y4-data-provision
 mkdir -p "$state"
+rm -f "$state/y4-board-ready"
 fail() { echo "y4-data-provision: $*" >&2; exit 1; }
 
 desktop_tmp=
@@ -50,39 +51,39 @@ desktop_has_files() {
     [ -d "$1" ] && [ -n "$(find "$1" -mindepth 1 ! -type d -print -quit)" ]
 }
 
-desktop_previous_slot() {
-    desktop_old_device=
+find_previous_slot() {
+    previous_device=
     slot_bytes=$((16 * 1024 * MIB))
     first_slot_start=$(((10 + 512) * MIB))
     this_start=$(( $(cat "$partition_sys/start") * 512 ))
     case "$this_start" in
         "$first_slot_start") previous_start=$((first_slot_start + slot_bytes)) ;;
         "$((first_slot_start + slot_bytes))") previous_start=$first_slot_start ;;
-        *) fail 'cannot identify the active A/B slot for panel migration' ;;
+        *) fail 'cannot identify the active A/B slot for state migration' ;;
     esac
     [ "$(( $(cat "$partition_sys/size") * 512 ))" -eq "$slot_bytes" ] ||
-        fail 'active slot has unexpected geometry for panel migration'
+        fail 'active slot has unexpected geometry for state migration'
     for candidate in "$disk_sys"/"$disk_devname"*[0-9] "$disk_sys"/"$disk_devname"p*[0-9]; do
         [ -f "$candidate/start" ] && [ -f "$candidate/size" ] || continue
         [ "$(( $(cat "$candidate/start") * 512 ))" -eq "$previous_start" ] || continue
         [ "$(( $(cat "$candidate/size") * 512 ))" -eq "$slot_bytes" ] ||
             fail 'previous slot has unexpected size for panel migration'
         candidate_name=$(basename "$candidate")
-        desktop_old_device=$(readlink -f "/dev/$candidate_name")
+        previous_device=$(readlink -f "/dev/$candidate_name")
     done
-    [ -b "$desktop_old_device" ] || fail 'cannot locate the other A/B slot for panel migration'
-    [ "$desktop_old_device" != "$root_device" ] && [ "$desktop_old_device" != "$data_device" ] ||
+    [ -b "$previous_device" ] || fail 'cannot locate the other A/B slot for state migration'
+    [ "$previous_device" != "$root_device" ] && [ "$previous_device" != "$data_device" ] ||
         fail 'previous slot aliases an active device'
-    previous_type=$(blkid -p -o value -s TYPE "$desktop_old_device" 2>/dev/null || true)
+    previous_type=$(blkid -p -o value -s TYPE "$previous_device" 2>/dev/null || true)
     # A full flash can leave the unused slot blank. Only ext4 can hold state
     # from an earlier Y4 root; never mount an unrelated filesystem.
-    [ "$previous_type" = ext4 ] || { desktop_old_device=; return; }
-    previous_header=$(dumpe2fs -h "$desktop_old_device" 2>/dev/null) ||
+    [ "$previous_type" = ext4 ] || { previous_device=; return; }
+    previous_header=$(dumpe2fs -h "$previous_device" 2>/dev/null) ||
         fail 'cannot inspect the previous slot filesystem'
     previous_state=$(printf '%s\n' "$previous_header" | awk -F ': *' '$1 == "Filesystem state" {print $2; exit}')
-    [ "$previous_state" = clean ] || fail 'previous slot is not clean; panel state needs manual recovery'
+    [ "$previous_state" = clean ] || fail 'previous slot is not clean; state migration needs manual recovery'
     if printf '%s\n' "$previous_header" | grep '^Filesystem features:' | grep -qw needs_recovery; then
-        fail 'previous slot needs journal recovery; refusing to import stale panel state'
+        fail 'previous slot needs journal recovery; refusing to import stale state'
     fi
 }
 
@@ -118,11 +119,11 @@ desktop_state_init() {
         desktop_source=$desktop_current
         desktop_origin=current-slot
     else
-        desktop_previous_slot
-        if [ -n "$desktop_old_device" ]; then
+        find_previous_slot
+        if [ -n "$previous_device" ]; then
             previous_mount=$state/previous-slot
             mkdir -p "$previous_mount" || fail 'cannot create previous slot mount point'
-            mount -t ext4 -o ro,noload "$desktop_old_device" "$previous_mount" ||
+            mount -t ext4 -o ro,noload "$previous_device" "$previous_mount" ||
                 fail 'cannot read previous slot for panel migration'
             previous_mounted=yes
             previous_state_dir=$previous_mount/var/lib/myt_desktop
@@ -203,6 +204,46 @@ desktop_state_prepare() {
 }
 # END desktop-state helpers
 
+# MCU installation receipts and their immutable packages are board-wide.
+# A failure with this subtree leaves data available to other consumers.
+mcu_state_init() {
+    state_dest=$mountpoint/y4-board/state
+    set -- "$mountpoint" /
+    if [ ! -e "$state_dest" ] && [ ! -L "$state_dest" ]; then
+        find_previous_slot
+        if [ -n "$previous_device" ]; then
+            previous_mount=$state/previous-mcu-slot
+            mkdir -p "$previous_mount" || fail 'cannot create previous MCU state mount point'
+            mount -t ext4 -o ro,noload "$previous_device" "$previous_mount" ||
+                fail 'cannot read previous slot for MCU state migration'
+            previous_mounted=yes
+            set -- "$@" "$previous_mount"
+        fi
+    fi
+    /usr/libexec/y4-board/y4-board-boot --migrate-mcu-state "$@" ||
+        fail 'cannot prepare shared MCU state'
+    if [ "$previous_mounted" = yes ]; then
+        umount "$previous_mount" || fail 'cannot unmount previous MCU state slot'
+        previous_mounted=no
+    fi
+}
+
+mcu_state_prepare() {
+    [ -f /etc/y4-board/mcu-state-shared ] || return 0
+    if (
+        data_mounted=no
+        previous_mounted=no
+        trap cleanup EXIT
+        trap 'exit 1' HUP INT TERM
+        mcu_state_init
+    ); then
+        printf 'ready\n' > "$state/y4-board-ready" ||
+            echo 'y4-data-provision: cannot publish MCU state readiness' >&2
+    else
+        echo 'y4-data-provision: MCU state unavailable; firmware maintenance stays disabled' >&2
+    fi
+}
+
 fstype=$(findmnt --noheadings --raw --output FSTYPE --target /)
 [ "$fstype" = ext4 ] || fail "mounted / is not ext4: $fstype"
 
@@ -236,7 +277,11 @@ done
 [ -b "$data_device" ] || fail "no partition starts at the fixed data offset $data_start_bytes"
 [ "$data_device" != "$root_device" ] || fail 'data partition resolves to the mounted root'
 
-type=$(blkid -p -o value -s TYPE "$data_device" 2>/dev/null || true)
+if type=$(blkid -p -o value -s TYPE "$data_device" 2>/dev/null); then
+    :
+else
+    [ "$?" -eq 2 ] || fail 'cannot identify data filesystem safely'
+fi
 case "$type" in
     ''|ext4) ;;
     *) type=other ;;
@@ -245,12 +290,16 @@ stamped=no
 mountpoint=$state/mnt
 if [ "$type" = ext4 ]; then
     mkdir -p "$mountpoint"
-    if mount -t ext4 -o ro "$data_device" "$mountpoint" 2>/dev/null; then
-        data_mounted=yes
-        if [ -f "$mountpoint/.y4-data-stamp" ]; then stamped=yes; fi
-        umount "$mountpoint"
-        data_mounted=no
+    mount -t ext4 -o ro "$data_device" "$mountpoint" ||
+        fail 'existing data ext4 cannot be mounted; refusing to format it'
+    data_mounted=yes
+    if [ -f "$mountpoint/.y4-data-stamp" ]; then
+        stamped=yes
+    elif [ "$(blkid -p -o value -s LABEL "$data_device" 2>/dev/null || true)" = Y4DEB_DATA ]; then
+        fail 'existing data label has no initialization stamp; refusing to format it'
     fi
+    umount "$mountpoint"
+    data_mounted=no
 fi
 
 if [ "$stamped" = yes ]; then
@@ -303,6 +352,7 @@ mkdir -p "$mountpoint"
 mount -t ext4 "$data_device" "$mountpoint" || fail 'cannot mount data for panel state initialization'
 data_mounted=yes
 desktop_state_prepare
+mcu_state_prepare
 umount "$mountpoint" || fail 'cannot unmount initialized data'
 data_mounted=no
 

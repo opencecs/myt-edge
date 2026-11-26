@@ -443,20 +443,21 @@ idle → accepted → open → verifying(验签) → manifest(门禁/旧布局�
      → grubenv(N5/N6 每槽绑定切换) → ready → rebooting(有序重启请求已发)
 ```
 
-升级器先写入并校验非活动槽及其内核，之后才更新 grubenv。重启请求发生在 grubenv 写入之后，单独报告失败。重启和首启时通过 `GET /api/v1/version` 核对运行版本与已确认启动槽。
+升级器先写入并校验非活动槽及其内核，之后才更新 grubenv。重启请求发生在 grubenv 写入之后，单独报告失败。重启和首启时通过 `GET /api/v1/version` 核对运行版本与已确认启动槽。真实启动到未确认槽后才增加试启动计数。同一内核 boot ID 下重启板载服务只计一次。试启动达到三次后，等本次开机的初始化写入与 MCU 维护结束，再请求有序回滚重启。
 
 ### POST /api/v1/update/confirm
 
-- 请求体必须为空（400 if any）
-- 作用：当前运行槽 `boot_ok=1`、`boot_count=0`，刷新 `/data/y4-board/confirmed.json`，并触发内核目录 GC（无引用的 `/boot/efi/kernels/` 目录与 `.new-*` 残留全清）
-- 成功 200 + 状态 JSON；grubenv 不可读时 503
+- 请求体必须为空。有请求体时返回 400。
+- 实际挂载的根分区与 GRUB 的试启动槽一致，且初始化写入结束后，才确认该槽。确认设置 `boot_ok=1`、`boot_count=0`，刷新 `/data/y4-board/confirmed.json`，并清理无引用的内核目录。
+- 成功返回 200 和状态 JSON。仍运行旧槽时返回 409 `slot_reboot_pending`。OTA 或 MCU 任务忙时返回 409，grubenv 或实际根槽不可读时返回 503。系统待切槽或达到回滚阈值时，接收新 OTA 或装入 MCU 固件同样返回 409 `slot_reboot_pending`。
 
 ## 9. MCU 固件接口
 
 ### GET /api/v1/mcu/firmware —— 当前生效包记录
 
 - 无请求体；200 + `/var/lib/y4-board/active.json` 原文（经 **POST /api/v1/mcu/firmware** 部署的包的收据：`{schema,package,sha256,job,version,uid,sequence}`）
-- 状态目录无记录时返回 `{"schema":1,"active":false}`。内置固件不产生主动上传记录，当前运行版本以硬件接口的 `mcu.firmware` 为准。
+- 整机镜像把 MCU 状态目录绑定到 `/data/y4-board/state`，A/B 槽共用已安装的包、签名序号和未结束的任务记录。首次迁移从旧槽只读导入经过校验的记录。运行旧版系统槽时仍以其自身旧布局为准。
+- 状态目录无记录时返回 `{"schema":1,"active":false}`。硬件接口的 `mcu.firmware` 返回 MCU 实际运行版本。
 
 ### POST /api/v1/mcu/firmware
 
@@ -483,7 +484,7 @@ idle → accepted → open → verifying(验签) → manifest(门禁/旧布局�
 | `running` | bool | 烧写助手进程在跑 |
 | `overdue` | bool | 任务超时未完成 |
 | `cancel_requested` | bool | 已请求取消 |
-| `blocked` | bool | 助手被阻塞（锁冲突等） |
+| `blocked` | bool | MCU 状态无法安全确认，系统 OTA 与 MCU 升级写入都被阻断 |
 | `helper_phase` | string | 助手子相位：writing/verifying/complete/unavailable/malformed |
 | `helper_status` | int | 助手上报错误码（-61=-ENODATA 无数据） |
 | `progress_valid` | bool | 进度计数可信（writing/verifying/complete 且计数自洽） |
@@ -495,6 +496,7 @@ idle → accepted → open → verifying(验签) → manifest(门禁/旧布局�
 ### POST /api/v1/mcu/cancel
 
 - 空请求体。有助手任务时标记取消并返回 202。无任务时返回 409 `no_owned_update`。
+- 取消后等待助手退出并核对终态。确认恢复到安全状态且所需 Flash 回读有效后，解除互斥。异常退出或缺少可信读回时，返回状态 `interrupted_unknown`，同一次开机内重启板载服务仍保持保护。下一次整机启动后，能确认本次初始化安全恢复并读到新鲜 MCU 身份时，状态转为 `recovery_verified`。
 
 ## 10. 集成示例（Python，经 SSH 隧道）
 

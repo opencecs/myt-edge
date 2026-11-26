@@ -17,9 +17,6 @@
 #include <string.h>
 #include <sys/utsname.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <sys/reboot.h>
-#include <sys/stat.h>
 #include <time.h>
 
 struct text {char *data;size_t cap,used;int error;};
@@ -149,141 +146,176 @@ int fresh=s&&s->magic==Y4_BOARD_SAMPLE_MAGIC&&!s->mcu_error;
  if(t.error)return t.error;
  return (int)t.used;
 }
-/* ---- Slot try-counter, confirmation and rollback (OTA design section 8) ----
- *
- * grub on this board cannot run the counter logic (if/test is unreliable),
- * so the whole protocol lives here and in grubenv - the single mutable
- * version state. The daemon runs it at startup and on its health tick:
- * no extra daemon, no extra units. */
-#define Y4_SLOT_CONFIRMED_FILE "/data/y4-board/confirmed.json"
+/* ---- Slot try-counter, confirmation and rollback (OTA design section 8) ---- */
+#define Y4_SLOT_STATE_DIR "/data/y4-board"
+#define Y4_SLOT_CONFIRMED_FILE Y4_SLOT_STATE_DIR "/confirmed.json"
 #define Y4_SLOT_TRY_LIMIT 3
+#define Y4_SLOT_CONFIRM_RETRY_MS 1000u
+#define Y4_SLOT_HEALTH_MAX_AGE_MS 5000u
 
 static const char *const slot_grubenv_paths[] = {
     Y4_GRUBENV_DEFAULT, Y4_GRUBENV_BACKUP, NULL};
 
-static int slot_write_confirmed(const struct y4_slot_state *state) {
-  if (mkdir("/data/y4-board", 0700) && errno != EEXIST) return -errno;
-  FILE *f = fopen(Y4_SLOT_CONFIRMED_FILE ".tmp", "w");
-  if (!f) return -errno;
-  long at = (long)time(NULL);
-  if (fprintf(f, "{\"schema\":1,\"default\":%d,\"slot\":\"%s\",\"confirmed_at\":%ld}\n",
-              state->default_entry, state->slot[0] ? state->slot : "A", at) < 0) {
-    fclose(f); return -EIO;
-  }
-  if (fclose(f)) return -errno;
-  if (rename(Y4_SLOT_CONFIRMED_FILE ".tmp", Y4_SLOT_CONFIRMED_FILE)) return -errno;
-  int dir = open("/data/y4-board", O_RDONLY | O_DIRECTORY);
-  if (dir >= 0) { (void)fsync(dir); close(dir); }
-  return 0;
+static int selected_slot(const struct y4_slot_state *state) {
+  if (!state->have_default || (state->default_entry != 0 && state->default_entry != 1))
+    return -EINVAL;
+  if (state->have_slot && state->slot[0] != 'A' + state->default_entry)
+    return -EINVAL;
+  return state->default_entry;
 }
 
-static int slot_read_confirmed(int *default_entry, char *slot, size_t cap) {
-  char body[256];
-  size_t n = 0;
-  int e = y4_board_read_file(Y4_SLOT_CONFIRMED_FILE, body, sizeof body - 1, &n);
+static int current_boot_id(char id[37]) {
+  char text[40];
+  size_t bytes = 0;
+  int e = y4_board_read_file("/proc/sys/kernel/random/boot_id", text, sizeof text, &bytes);
   if (e) return e;
-  body[n] = 0;
-  const char *at = strstr(body, "\"default\":");
-  if (!at) return -EINVAL;
-  char *endp; long value = strtol(at + 10, &endp, 10);
-  if (endp == at + 10 || (value != 0 && value != 1)) return -EINVAL;
-  const char *q = strstr(body, "\"slot\":\"");
-  if (!q) return -EINVAL;
-  q += 8;
-  if (!q[0] || q[1] != '"' || (q[0] != 'A' && q[0] != 'B')) return -EINVAL;
-  *default_entry = (int)value;
-  if (cap) { slot[0] = q[0]; if (cap > 1) slot[1] = 0; }
+  if (bytes && text[bytes - 1] == '\n') text[--bytes] = 0;
+  if (!y4_boot_id_valid(text)) return -EPROTO;
+  memcpy(id, text, 37);
   return 0;
 }
 
-/* Startup duty: an unconfirmed slot counts this try and rolls back to the
- * last confirmed slot after three failures, rebooting before services
- * waste time. A confirmed slot needs nothing here. */
-int y4_board_slot_boot_count(void) {
-  struct y4_slot_state state;
-  int e = y4_grubenv_read(Y4_GRUBENV_DEFAULT, &state);
-  if (e == -ENOENT) return 0; /* not provisioned yet; nothing to count */
-  if (e) { fprintf(stderr, "y4-board slot: grubenv read failed status=%d\n", e); return e; }
-  if (state.boot_ok) return 0;
-  state.boot_count += 1;
-  fprintf(stderr, "y4-board slot: try boot count=%ld slot=%c\n",
-          state.boot_count, state.slot[0] ? state.slot[0] : '?');
-  if (state.boot_count < Y4_SLOT_TRY_LIMIT)
-    return y4_grubenv_write(slot_grubenv_paths, &state);
-  /* Rollback target: the last confirmed slot; without a record, the other
-   * slot once - boot_count keeps climbing so an operator still sees it. */
-  struct y4_slot_state target = state;
-  target.boot_ok = 1;
-  target.boot_count = 0;
-  int confirmed = 0; char slot[2] = {0};
-  e = slot_read_confirmed(&confirmed, slot, sizeof slot);
-  if (e == -ENOENT) {
-    fprintf(stderr, "y4-board slot: no confirmed record; switching to the other slot\n");
-    target.default_entry = state.default_entry ? 0 : 1;
-    target.slot[0] = state.default_entry ? 'A' : 'B';
-    target.have_default = target.have_slot = 1;
-  } else if (e) {
-    fprintf(stderr, "y4-board slot: confirmed record unreadable status=%d\n", e);
-    return e;
-  } else if (confirmed == state.default_entry) {
-    fprintf(stderr, "y4-board slot: confirmed slot equals the failing slot\n");
-    return 0;
-  } else {
-    target.default_entry = confirmed;
-    target.slot[0] = slot[0];
-    target.have_default = target.have_slot = 1;
-    fprintf(stderr, "y4-board slot: rolling back to confirmed slot %c\n", slot[0]);
-  }
-  e = y4_grubenv_write(slot_grubenv_paths, &target);
-  if (e) { fprintf(stderr, "y4-board slot: grubenv write failed status=%d\n", e); return e; }
-  sync();
-  /* Clean reboot first: a forced reboot(2) occasionally wedges this board's
-   * boot chain (seen on real hardware with reboot -f and with a direct
-   * reboot(2) from this daemon). systemd stops services and syncs
-   * filesystems; only if that cannot even be started do we force it. */
-  pid_t child = fork();
-  if (child == 0) {
-    execl("/usr/bin/systemctl", "systemctl", "reboot", (char *)NULL);
-    execl("/sbin/reboot", "reboot", (char *)NULL);
-    _exit(127);
-  }
-  if (child > 0) {
-    for (int i = 0; i < 100; i++) {          /* up to 10 s */
-      struct timespec nap = {0, 100000000};
-      (void)nanosleep(&nap, NULL);
-      if (kill(child, 0) && errno == ESRCH) break;
-    }
-    fprintf(stderr, "y4-board slot: clean reboot requested\n");
-    return 0;
-  }
-  fprintf(stderr, "y4-board slot: systemctl unavailable; forcing reboot\n");
-  (void)reboot(RB_AUTOBOOT);
-  return 0;
+static int slot_write_confirmed(int selected) {
+  int e = y4_board_private_dir(Y4_SLOT_STATE_DIR);
+  if (e) return e;
+  char text[128];
+  int n = snprintf(text, sizeof text,
+                   "{\"schema\":1,\"default\":%d,\"slot\":\"%c\",\"confirmed_at\":%ld}\n",
+                   selected, 'A' + selected, (long)time(NULL));
+  if (n < 0 || (size_t)n >= sizeof text) return -EOVERFLOW;
+  return y4_board_atomic_file(Y4_SLOT_STATE_DIR, "confirmed.json", text, (size_t)n, 0600);
 }
 
-/* Health-tick duty: once the daemon observes a fresh MCU sample (the same
- * freshness rule the hardware snapshot uses), the slot has demonstrably
- * reached working userspace - confirm it and refresh the confirmed record
- * on the data partition. */
-int y4_board_slot_confirm_tick(const struct y4_board_sample *s) {
-  static int done;
-  if (done || !s || s->magic != Y4_BOARD_SAMPLE_MAGIC || s->mcu_error) return 0;
-  done = 1;
+static int slot_read_confirmed(void) {
+  char text[256], slot[2];
+  long long schema = 0, selected = -1;
+  int e = y4_board_read_file(Y4_SLOT_CONFIRMED_FILE, text, sizeof text, NULL);
+  if (e) return e;
+  if (y4_board_json_number(text, "schema", &schema) || schema != 1 ||
+      y4_board_json_number(text, "default", &selected) || (selected != 0 && selected != 1) ||
+      y4_board_json_string(text, "slot", slot, sizeof slot) || slot[0] != 'A' + selected)
+    return -EINVAL;
+  return (int)selected;
+}
+
+int y4_board_slot_pending_reboot(void) {
   struct y4_slot_state state;
   int e = y4_grubenv_read(Y4_GRUBENV_DEFAULT, &state);
   if (e == -ENOENT) return 0;
-  if (e) { fprintf(stderr, "y4-board slot: grubenv read failed status=%d\n", e); return e; }
-  if (!state.slot[0]) { state.slot[0] = state.default_entry ? 'B' : 'A'; state.have_slot = 1; }
-  if (!state.boot_ok) {
+  if (e) return e;
+  if (state.boot_ok && !state.rollback_pending) return 0;
+  int selected = selected_slot(&state);
+  if (selected < 0) return selected;
+  int running = y4_board_running_slot();
+  if (running < 0) return running;
+  return running != selected || (!state.boot_ok && state.boot_count >= Y4_SLOT_TRY_LIMIT);
+}
+
+int y4_board_slot_boot_count(int allow_rollback) {
+  if (y4_board_ota_busy()) return -EAGAIN;
+  struct y4_slot_state state;
+  int e = y4_grubenv_read(Y4_GRUBENV_DEFAULT, &state);
+  if (e == -ENOENT) return 0;
+  if (e) return e;
+  if (state.boot_ok && !state.rollback_pending) return 0;
+  int selected = selected_slot(&state);
+  if (selected < 0) return selected;
+  int running = y4_board_running_slot();
+  if (running < 0) return running;
+  if (running != selected && !state.rollback_pending) return 0;
+
+  char id[37];
+  e = current_boot_id(id);
+  if (e) return e;
+  if (state.rollback_pending) {
+    if (running == selected) {
+      state.rollback_pending = 0;
+      state.boot_count_id[0] = 0;
+      return y4_grubenv_write(slot_grubenv_paths, &state);
+    }
+    /* Requeue if the service restarted or D-Bus failed before the reboot.
+     * A manually selected slot in a later boot does not trigger a loop. */
+    if (strcmp(id, state.boot_count_id)) return 0;
+    return allow_rollback ? y4_board_request_reboot() : -EAGAIN;
+  }
+
+  if (strcmp(id, state.boot_count_id)) {
+    if (state.boot_count < Y4_SLOT_TRY_LIMIT) state.boot_count++;
+    memcpy(state.boot_count_id, id, sizeof id);
+    e = y4_grubenv_write(slot_grubenv_paths, &state);
+    if (e) return e;
+    fprintf(stderr, "y4-board slot: try boot count=%ld slot=%c\n",
+            state.boot_count, 'A' + running);
+  }
+  if (state.boot_count < Y4_SLOT_TRY_LIMIT) return 0;
+  if (!allow_rollback) return -EAGAIN;
+
+  int confirmed = slot_read_confirmed();
+  if (confirmed == -ENOENT) {
+    confirmed = 1 - selected;
+    fprintf(stderr, "y4-board slot: no confirmed record; switching to the other slot\n");
+  } else if (confirmed < 0) return confirmed;
+  else if (confirmed == selected) return -EUCLEAN;
+
+  state.default_entry = confirmed;
+  state.have_slot = 1;
+  state.slot[0] = (char)('A' + confirmed);
+  state.boot_ok = 1;
+  state.boot_count = 0;
+  state.rollback_pending = 1;
+  /* Persist the reboot intent with the new default. Once the systemd job
+   * is queued, it can safely be monitored across a daemon restart. */
+  e = y4_grubenv_write(slot_grubenv_paths, &state);
+  if (e) return e;
+  fprintf(stderr, "y4-board slot: rolling back to slot %c\n", state.slot[0]);
+  return y4_board_request_reboot();
+}
+
+int y4_board_ota_confirm(void) {
+  if (y4_board_ota_busy()) return -EBUSY;
+  struct y4_slot_state state;
+  int e = y4_grubenv_read(Y4_GRUBENV_DEFAULT, &state);
+  if (e) return e;
+  int selected = selected_slot(&state);
+  if (selected < 0) return selected;
+  int running = y4_board_running_slot();
+  if (running < 0) return running;
+  if (selected != running) return -EAGAIN;
+
+  if (!state.boot_ok || !state.have_slot || state.boot_count || state.rollback_pending ||
+      state.boot_count_id[0]) {
+    state.have_slot = 1;
+    state.slot[0] = (char)('A' + running);
     state.boot_ok = 1;
     state.boot_count = 0;
+    state.boot_count_id[0] = 0;
+    state.rollback_pending = 0;
     e = y4_grubenv_write(slot_grubenv_paths, &state);
-    if (e) { fprintf(stderr, "y4-board slot: grubenv write failed status=%d\n", e); return e; }
+    if (e) return e;
     fprintf(stderr, "y4-board slot: confirmed slot %c\n", state.slot[0]);
-    /* First healthy confirm of this slot: the boot FAT can now drop
-     * delivery directories nothing references any more (design 4.3 GC).
-     * Best effort; a GC problem must never fail the confirmation. */
-    (void)y4_board_kernels_gc();
   }
-  return slot_write_confirmed(&state);
+  e = slot_write_confirmed(running);
+  if (e) return e;
+  (void)y4_board_kernels_gc();
+  return 0;
+}
+
+/* Attempt confirmation once fresh MCU health is visible. A transient
+ * grubenv, mount, or receipt error remains retryable in this process. */
+int y4_board_slot_confirm_tick(const struct y4_board_sample *s) {
+  static int done;
+  static uint64_t retry_at;
+  if (done || y4_board_ota_busy() || !s || s->magic != Y4_BOARD_SAMPLE_MAGIC ||
+      s->mcu_error || !s->sampled_ms) return 0;
+  uint64_t now = y4_board_now_ms();
+  if (now < s->sampled_ms || now - s->sampled_ms >= Y4_SLOT_HEALTH_MAX_AGE_MS ||
+      now < retry_at) return 0;
+  int e = y4_board_ota_confirm();
+  if (!e) done = 1;
+  else {
+    retry_at = now + Y4_SLOT_CONFIRM_RETRY_MS;
+    if (e != -EAGAIN && e != -ENOENT)
+      fprintf(stderr, "y4-board slot: automatic confirmation deferred status=%d\n", e);
+  }
+  return e;
 }

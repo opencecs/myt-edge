@@ -373,6 +373,15 @@ static int running_partition(char *disk, size_t disk_cap, int *index) {
   return result;
 }
 
+int y4_board_running_slot(void) {
+  char disk[64];
+  int running = 0;
+  int e = running_partition(disk, sizeof disk, &running);
+  if (e) return e;
+  if (running != 2 && running != 3) return -EINVAL;
+  return running - 2;
+}
+
 static int slot_device(int index, char *out, size_t cap) {
   char disk[64];
   int running = 0;
@@ -407,11 +416,11 @@ static int device_bytes(const char *path, uint64_t *bytes) {
  * filesystems in dependency order. Manager.Reboot() skips those jobs and
  * enters late shutdown directly. Keep this an IPC request: a direct
  * reboot(2) was measured to wedge the board's SCMI/MCU reset handshake. */
-static int request_reboot(void) {
+int y4_board_request_reboot(void) {
   GError *error = NULL;
   GDBusConnection *bus = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, &error);
   if (!bus) {
-    fprintf(stderr, "y4-board ota: reboot bus unavailable: %s\n",
+    fprintf(stderr, "y4-board reboot: bus unavailable: %s\n",
             error && error->message ? error->message : "unknown");
     if (error) g_error_free(error);
     return -ENOSYS;
@@ -424,7 +433,7 @@ static int request_reboot(void) {
       G_VARIANT_TYPE("(o)"),
       G_DBUS_CALL_FLAGS_NO_AUTO_START, 30000, NULL, &error);
   if (!reply) {
-    fprintf(stderr, "y4-board ota: reboot request failed: %s\n",
+    fprintf(stderr, "y4-board reboot: request failed: %s\n",
             error && error->message ? error->message : "unknown");
     if (error) g_error_free(error);
     g_object_unref(bus);
@@ -1406,6 +1415,8 @@ static int step_grubenv(void) {
   }
   state.boot_count = 0;
   state.boot_ok = 0;
+  state.boot_count_id[0] = 0;
+  state.rollback_pending = 0;
   const char *const paths[] = {Y4_GRUBENV_DEFAULT, Y4_GRUBENV_BACKUP, NULL};
   return y4_grubenv_write(paths, &state);
 }
@@ -1614,7 +1625,7 @@ void y4_board_ota_tick(void) {
         }
         break;
       case OTA_READY:
-        e = request_reboot();
+        e = y4_board_request_reboot();
         if (!e) {
           ota.state = OTA_REBOOTING;
           ota.completed_ms = y4_board_now_ms();
@@ -1642,25 +1653,4 @@ int y4_board_ota_status_json(char *out, size_t cap) {
                    ota.payload_sha, ota.payload_hash,
                    ota.schema, ota.k_release, ota.k_cursor, ota.k_bytes);
   return n < 0 || (size_t)n >= cap ? -EOVERFLOW : n;
-}
-
-int y4_board_ota_confirm(void) {
-  struct y4_slot_state state;
-  int e = y4_grubenv_read(Y4_GRUBENV_DEFAULT, &state);
-  if (e == -ENOENT) return -ENOENT;
-  if (e) return e;
-  state.boot_ok = 1;
-  state.boot_count = 0;
-  if (!state.slot[0]) {
-    state.slot[0] = state.default_entry ? 'B' : 'A';
-    state.have_slot = 1;
-  }
-  const char *const paths[] = {Y4_GRUBENV_DEFAULT, Y4_GRUBENV_BACKUP, NULL};
-  e = y4_grubenv_write(paths, &state);
-  if (e) return e;
-  /* A confirmed slot has demonstrated a working kernel: the boot FAT can
-   * now drop delivery directories nothing references any more (design 4.3
-   * GC). Best effort - a GC problem must never fail the confirm. */
-  (void)y4_board_kernels_gc();
-  return 0;
 }
