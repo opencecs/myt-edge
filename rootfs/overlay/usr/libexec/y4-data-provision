@@ -1,10 +1,10 @@
 #!/bin/sh
 # Prepare the fixed data partition before it is mounted. Slot-a and slot-b
 # are rewritten by every OTA package; the data partition never is. A
-# filesystem stamped by this script is checked and grown only when it is
-# smaller than its partition, and never reformatted; any other signature
-# (for example the tail of an earlier whole-disk root layout) is replaced
-# with a fresh filesystem seeded from this slot's /root and /home. Locates
+# filesystem stamped by this script is checked before it is mounted and
+# grown only when smaller than its partition. Other signatures, such as
+# the tail of an earlier whole-disk root layout, are replaced with a
+# fresh filesystem seeded from this slot's /root and /home. Locates
 # the partition by its fixed geometry on the root disk, with devtmpfs and
 # sysfs only: udevd is not up yet.
 set -eu
@@ -286,9 +286,20 @@ case "$type" in
     ''|ext4) ;;
     *) type=other ;;
 esac
+check_data_ext4() {
+    fsck_status=0
+    e2fsck -p "$@" "$data_device" || fsck_status=$?
+    case "$fsck_status" in
+        0|1) ;; # Clean or corrected successfully.
+        *) fail "data filesystem check failed (e2fsck status $fsck_status)" ;;
+    esac
+}
+
 stamped=no
 mountpoint=$state/mnt
 if [ "$type" = ext4 ]; then
+    # fstab leaves this check to us so it runs with the device unmounted.
+    check_data_ext4
     mkdir -p "$mountpoint"
     mount -t ext4 -o ro "$data_device" "$mountpoint" ||
         fail 'existing data ext4 cannot be mounted; refusing to format it'
@@ -303,11 +314,8 @@ if [ "$type" = ext4 ]; then
 fi
 
 if [ "$stamped" = yes ]; then
-    # Steady state: never resize or repair a filesystem that already fills
-    # its partition. Panel-state initialization is handled below. Grow (with a forced
-    # check, as resize2fs requires) only when it is smaller than its
-    # partition, which happens only when a future flow flashes a smaller
-    # data image than the actual capacity.
+    # The normal pre-mount check is already complete. Force a full check,
+    # as required by resize2fs, only before growing a smaller filesystem.
     echo 'y4-data-provision: stamped data filesystem found'
     partition_bytes=$(blockdev --getsize64 "$data_device") || fail 'cannot read the data partition size'
     printf '%s\n' "$partition_bytes" | grep -Eq '^[1-9][0-9]*$' || fail 'invalid data partition size'
@@ -320,7 +328,7 @@ if [ "$stamped" = yes ]; then
     filesystem_bytes=$((block_count * block_bytes))
     echo "y4-data-provision: data filesystem=$filesystem_bytes partition=$partition_bytes"
     if [ "$filesystem_bytes" -lt "$partition_bytes" ]; then
-        e2fsck -f -p "$data_device" || fail 'data filesystem check failed'
+        check_data_ext4 -f
         resize2fs "$data_device" || fail 'cannot grow the stamped data filesystem'
     else
         echo 'y4-data-provision: data filesystem already fills its partition; nothing to do'

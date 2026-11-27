@@ -1688,10 +1688,12 @@ class Builder:
         # both slots. The data partition mounts nofail and its subtrees are
         # bind-mounted over the machine-state directories so user data
         # survives every slot switch. Sources are the fixed partition GUIDs,
-        # resolved from the GPT itself, never probed by blkid.
+        # resolved from the GPT itself, never probed by blkid. The data
+        # provisioner checks existing ext4 before mounting. A separate fsck
+        # job would race it while initializing or growing the partition.
         (self.fs / "etc/fstab").write_text(
               "PARTUUID=" + str(self.part_ids[0]) + " /boot/efi vfat defaults,umask=0077,nofail 0 2\n"
-              + "PARTUUID=" + str(self.part_ids[3]) + " /data ext4 defaults,nofail 0 2\n"
+              + "PARTUUID=" + str(self.part_ids[3]) + " /data ext4 defaults,nofail 0 0\n"
               + "/data/home /home none bind,nofail 0 0\n"
               + "/data/root /root none bind,nofail 0 0\n"
               + "/data/docker /var/lib/docker none bind,nofail 0 0\n"
