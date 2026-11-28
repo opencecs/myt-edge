@@ -6,11 +6,11 @@
   "image_sha256": "ffa0c9e65d330ccec7647bacb14f4fe2bb3ee6365095863e4fb530ef34f5fb0b",
   "object": "MCU",
   "package_bytes": 153018,
-  "package_sha256": "7147460d9b48968b223071eab5bf94665c2b098a1ee5cdce3f00d16237f191ba",
+  "package_sha256": "b1fde2bf1eecf87af427fe2e34fe9f2d2701bb441d7fafa40f61eb8b7bb42432",
   "protocol": 2,
   "schema": 1,
-  "sequence": 1011,
-  "sha256": "7147460d9b48968b223071eab5bf94665c2b098a1ee5cdce3f00d16237f191ba",
+  "sequence": 1012,
+  "sha256": "b1fde2bf1eecf87af427fe2e34fe9f2d2701bb441d7fafa40f61eb8b7bb42432",
   "signed": true,
   "version": "0.1.49"
 }
