@@ -10,8 +10,8 @@
     }
   },
   "panel": {
-    "gzip_sha256": "945dd1a6cd329575fe5a2adfc656e804d81dcc9186f59b0cb0febd98b962e467",
-    "manifest_sha256": "411a007608fc583eb667b7896d280707f84e7b347ff26862bed79ec24213bd27"
+    "gzip_sha256": "bc2d266a2115988b4a16c2e924f80ec1c6aeebd022b5cc5fb78bb3f235c0733f",
+    "manifest_sha256": "989724a806a3538fe6ea3abdca70766b6505a4e8351646586f478de967ba3571"
   },
   "schema": 1
 }
