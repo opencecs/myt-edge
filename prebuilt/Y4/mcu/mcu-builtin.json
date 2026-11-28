@@ -2,15 +2,15 @@
   "flashed": false,
   "host_max": "0.1.0",
   "host_min": "0.1.0",
-  "image_bytes": 152112,
-  "image_sha256": "b7275467cda0c84014840610530ca1f9d1ef1fc7cddbb06bf0def7be706d4eb2",
+  "image_bytes": 152672,
+  "image_sha256": "ffa0c9e65d330ccec7647bacb14f4fe2bb3ee6365095863e4fb530ef34f5fb0b",
   "object": "MCU",
-  "package_bytes": 152458,
-  "package_sha256": "217a2f8c675572bee911a060a60a7f05a3d83ec0c852bfe9c25088b8cd762045",
+  "package_bytes": 153018,
+  "package_sha256": "7147460d9b48968b223071eab5bf94665c2b098a1ee5cdce3f00d16237f191ba",
   "protocol": 2,
   "schema": 1,
-  "sequence": 1010,
-  "sha256": "217a2f8c675572bee911a060a60a7f05a3d83ec0c852bfe9c25088b8cd762045",
+  "sequence": 1011,
+  "sha256": "7147460d9b48968b223071eab5bf94665c2b098a1ee5cdce3f00d16237f191ba",
   "signed": true,
-  "version": "0.1.48"
+  "version": "0.1.49"
 }
