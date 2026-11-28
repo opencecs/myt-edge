@@ -1,9 +1,9 @@
 {
   "arch": "arm64",
   "bytes": 137232546,
-  "commit": "ad0914ff8b4d2f77830577ec7ce6d398a6b67da3",
+  "commit": "52ffbf1694459869eb25303cd30243c8cd43cdd8",
   "profile": "nofrp",
   "schema": 1,
-  "sha256": "5057bd368a93a5fae1e718af1d892585c1cb54ad2cbd0e3602086215663befab",
+  "sha256": "6400cff9d6873028efcad570fc972f5b49aaee052aa9344247bb3caa05fbf722",
   "version": "1.1.7-lan-test"
 }
