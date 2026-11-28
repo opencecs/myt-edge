@@ -3,11 +3,11 @@
   "files": {
     "firmware/build/y4-mcu.bin": {
       "bytes": 152112,
-      "sha256": "8683eee66a4fe0d168a7d1fd5d5eb40f518e8ab79c0a1251918894a009153af9"
+      "sha256": "b7275467cda0c84014840610530ca1f9d1ef1fc7cddbb06bf0def7be706d4eb2"
     },
     "firmware/build/y4-mcu.hex": {
       "bytes": 427762,
-      "sha256": "d2f85ad8ddf21a95c3b27056128f6e4000f851a9ec5d8b7c67c94cbf6ffd414a"
+      "sha256": "4131ce9c88ec81557deffd176dafbf5c1197f9a4d2f3c301b26c74d8ceb988b2"
     },
     "host-version": {
       "bytes": 6,
@@ -30,8 +30,8 @@
       "sha256": "12936b40608e966feb7b5ee4061039ac0bbcbf07b54c8ee84cbc9a089ff1a3af"
     },
     "host/y4-mcu-maintain": {
-      "bytes": 299016,
-      "sha256": "5cdc5be3adf98002960d0570b753ed19caece70b42cc0e1c9205787cc9642e10"
+      "bytes": 298968,
+      "sha256": "a25b1fa5d915a672a03d0b1edd672f949c3998d7aafd8b5b36dd88107331d0fd"
     },
     "host/y4-mcu-reset": {
       "bytes": 71648,
@@ -51,11 +51,11 @@
     },
     "mcu-builtin.json": {
       "bytes": 487,
-      "sha256": "4e9001d891b53e424baa79d74ac424bb485d5c16f371e158deefbb770a58f394"
+      "sha256": "ad621b4b90d6cb8ff872eda16fc90724e26018dcb2553586752f194038668d70"
     },
     "mcu-package.bin": {
       "bytes": 152458,
-      "sha256": "d2a38918f98a05b471f5ee66048eaed46f2b6ab0e4fdd350c1696c2848e80083"
+      "sha256": "217a2f8c675572bee911a060a60a7f05a3d83ec0c852bfe9c25088b8cd762045"
     },
     "mcu-public-key.bin": {
       "bytes": 32,
