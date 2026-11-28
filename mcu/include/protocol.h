@@ -14,11 +14,11 @@ enum { COOL_IDLE=0, COOL_PENDING=1, COOL_COMMITTED=2, COOL_REJECTED=3, COOL_EXPI
 #define Y4_BOARD 4
 #define Y4_FW_MAJOR 0
 #define Y4_FW_MINOR 1
-#define Y4_FW_PATCH 47
+#define Y4_FW_PATCH 48
 /* Y4 V11 duty percent, not RPM or a cross-product thermal policy. UI fans
  * 1/2/3 map to protocol FAN3/4/5; preserve reserved FAN6 wire fields.
  * Y12 firmware/host protocols require their own verified adapter. */
-#define Y4_V11_FAN_DEFAULT 20u
+#define Y4_V11_FAN_DEFAULT 15u
 /* 0.1.39: host-directed fan policy for FAN3/FAN4/FAN5 (registers 0x72/0x73/
  * 0x7c..0x7e; contract below next to R_FAN). Protocol2, the cooling frame,
  * the display streams and the frozen health/backend blocks are unchanged.
@@ -85,9 +85,9 @@ enum {
  *   3=last persist failed (fans still follow the in-RAM policy; the
  *   setting is NOT durable until a later write reports 2).
  *
- * V11 (since 0.1.43): legacy and auto use fixed 20% for FAN3–FAN5.
- * Manual uses the stored duty with a live heartbeat. Host timeout and
- * per-channel stall select 20%; temperature is telemetry only.
+ * V11: legacy and auto use the fixed default for FAN3–FAN5 (15% since
+ * 0.1.48, 20% in 0.1.43–0.1.47). Manual uses the stored duty with a live
+ * heartbeat. Host timeout and per-channel stall restore the default.
  * The V11 FAN6 output is unused. */
 enum { Y4_FAN_POLICY_LEGACY=0, Y4_FAN_POLICY_AUTO=1, Y4_FAN_POLICY_MANUAL=2 };
 enum { Y4_FAN_POLICY_NONE=0, Y4_FAN_POLICY_PENDING=1,

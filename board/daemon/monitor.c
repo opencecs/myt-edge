@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #define _GNU_SOURCE
 #include "board_daemon.h"
+#include "../../mcu/include/protocol.h"
 #include "vendor/y4_os_mcu.h"
 #include "vendor/y4_os_cooling.h"
 #include "vendor/y4_os_mcu_health.h"
@@ -42,11 +43,14 @@ static int mcu_inside_display(int fd,const struct y4_board_temperature *inside)
  return rc;
 }
 
-static int mcu_owns_fan_duty(const struct y4_mcu_identity *id) {
- return id->version[0]==0u&&id->version[1]==1u&&id->version[2]>=43u;
+/* A zero result selects the host-managed cooling path used before MCU 0.1.43.
+ * This value reports the fixed fallback. Manual PWM is read back per fan. */
+static uint8_t mcu_fixed_fan_duty(const struct y4_mcu_identity *id) {
+ if(id->version[0]!=0u||id->version[1]!=1u||id->version[2]<43u)return 0;
+ return id->version[2]<48u?20u:Y4_V11_FAN_DEFAULT;
 }
 static int configure(int fd,const struct y4_mcu_identity *id) {
- if(!mcu_owns_fan_duty(id)) {
+ if(!mcu_fixed_fan_duty(id)) {
   for(uint8_t i=0;i<4u;i++){
    int e=y4_mcu_write_verified(fd,(uint8_t)(1u+i),100);
    if(e)return e;
@@ -383,8 +387,8 @@ int y4_board_monitor_run(int channel) {
    memcpy(s.firmware,id.version,3);
    /* V11 MCU owns duty. Keep publishing temperatures for display and
     * protocol compatibility, without requesting a temperature-based speed. */
-   int owns_duty=mcu_owns_fan_duty(&id);
-   if(owns_duty)s.requested_pwm=20u;
+   uint8_t fixed_duty=mcu_fixed_fan_duty(&id);
+   if(fixed_duty)s.requested_pwm=fixed_duty;
    if(!s.mcu_error&&id.version[0]==0u&&id.version[1]==1u&&id.version[2]>=19u)
     s.mcu_error=y4_mcu_soc_display(fd,s.temperature_error,&thermal);
    if(!s.mcu_error)s.mcu_error=y4_mcu_write_verified(fd,0x09,s.slot_online);
@@ -404,7 +408,7 @@ int y4_board_monitor_run(int channel) {
    if(!s.mcu_error)s.mcu_error=y4_mcu_write_verified(fd,0x05,++heartbeat);
    if(!s.mcu_error)s.display_error=y4_board_display_publish(fd,&s);
    if(!s.mcu_error) {
-    if(owns_duty)s.mcu_error=mcu_inside_display(fd,&s.inside);
+    if(fixed_duty)s.mcu_error=mcu_inside_display(fd,&s.inside);
     else s.mcu_error=y4_mcu_cooling_apply_for(fd,&id,&control);
    }
    struct y4_mcu_fans fans={0};s.fan_error=y4_mcu_fans_read(fd,&id,&fans);

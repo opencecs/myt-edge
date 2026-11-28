@@ -227,7 +227,7 @@ data: {"schema":1,"device":"Y4","sampled_ms":124000,"cpu":null,"memory":null}
 | 字段 | 类型 | 含义 |
 |---|---|---|
 | `status` | int | 冷却采样错误码 |
-| `requested_pwm` | u32 | 主机侧冷却请求百分比。Y4 V11 三路当前实际占空比读取各自的 `effective_pwm` |
+| `requested_pwm` | u32 | 主机管理风扇时为冷却请求百分比。Y4 MCU 0.1.43 起为固件固定默认值（0.1.43–0.1.47 为 20，0.1.48 为 15）；手动调节后各路实际占空比读取对应的 `effective_pwm` |
 | `FAN1_owner` | string | 恒 `"linux"`（FAN1 归内核 pwm-fan 驱动自动热控；守护进程**只读不写**） |
 | `FAN1` | obj | `{valid, status, rpm}` —— FAN1 实时转速（/sys/class/hwmon 中 `pwm-fan` 芯片的 `fan1_input`，零 exec 直读） |
 | `MCU_fans[]` | array | 4 项（connector=`FAN3`..`FAN6`）：`{connector, valid, monitored, rpm, effective_pwm}`；`monitored`=该口接了风扇（tach 检出）；`effective_pwm` 为 percent 0-100 |
@@ -329,22 +329,18 @@ Y4 物理 FAN1 在 UEFI 保持 50%。Linux 正常监控时，SoC 温度低于 45
 
 ### Y4 V11 的 MCU 策略
 
-MCU 独立控制 FAN3、FAN4、FAN5，先输出默认 20% PWM，再接通 12 V。三路的模式如下。
+Y4 V11 的 MCU 独立控制 FAN3、FAN4、FAN5。MCU 0.1.48 默认输出 25 kHz、15% PWM，再接通 12 V。0.1.43 至 0.1.47 的默认占空比为 20%。可从 `GET /api/v1/version` 的 `mcu` 字段确认设备实际运行的版本。下表适用于 0.1.48。
 
 | 模式 | 主机在线 | 主机失联（10 s 无心跳，含重启/OTA 期间） | 持久化 |
 |---|---|---|---|
-| `auto` | 三路固定 **20%** | **20%**（V11 MCU 0.1.43 起） | 模式存 MCU flash |
-| `manual` | 三路=已存占空比（`fan3/fan4/fan5`，percent 0-100，0=停转） | **20%**（V11 MCU 0.1.43 起） | 模式+三路占空比存 MCU flash，断电/重启后自动恢复 |
-| `legacy` | 三路固定 20% | 20% | 模式存 MCU flash |
+| `auto` | 三路固定 15% | 15% | 模式存 MCU flash |
+| `manual` | 各路使用已保存的占空比（0–100%，0 为停转），发生堵转的通道使用 15% | 三路回到 15% | 模式及三路占空比存 MCU flash，心跳恢复后重新应用 |
+| `legacy` | 三路固定 15% | 15% | 模式存 MCU flash |
 
-- V11 上电时先建立三路 20% PWM，再使能 12 V。
 - 失联判定：MCU 10 s 收不到心跳（`fault_bits` 的 bit4 `FAULT_HOST`），与 `host_online` 字段同口径。
 - 守护进程退出期间由 MCU 维持风扇输出。
-- 手动 `stored` 值 0 = 三路里对应风扇停转；主机失联后回到 20%。
 - 持久化写入 MCU 内部 flash（追加日志+CRC32C，掉电安全）；`status=3` 表示上次写入失败（RAM 内已生效但未持久化），重试 POST 即可。
 - POST 是同步的：MCU flash 写入期间 I2C 会被阻塞，守护进程轮询至多 ~12 s；期间其他 MCU 采样可能短暂失败一两个周期（快照 `fresh` 窗口 5 s 内自愈）。
-
-V11 自 MCU 0.1.43 起只配置 FAN3–FAN5。MCU 先建立 25 kHz、20% PWM，再使能 12 V。默认及 `auto`、`legacy` 模式固定 20%。显式 `manual` 请求可调节三路占空比，主机心跳超时回到 20%。温度仍用于显示，堵转仍记录，二者均不触发自动提速。
 
 ### Y4 POST /api/v1/fans
 
@@ -538,7 +534,7 @@ def board_call(method, path, body=None):
 print(board_call("GET", "/api/v1/fans"))
 # 手动 30/50/80（percent，永久保存）
 print(board_call("POST", "/api/v1/fans", {"policy": "manual", "fan3": 30, "fan4": 50, "fan5": 80}))
-# 自动：固定 20%
+# Y4 MCU 0.1.48 的自动模式固定为 15%
 print(board_call("POST", "/api/v1/fans", {"policy": "auto"}))
 print(board_call("GET", "/api/v1/temperature"))
 ```

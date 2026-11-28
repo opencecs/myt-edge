@@ -21,7 +21,9 @@ See the [platform overview](../docs/PLATFORM-OVERVIEW.md) and [board differences
 - debian/: packaging notices and the external vendor input boundaries.
 
 Y4 V11 uses physical FAN3/FAN4/FAN5 under MCU control, displayed as fan 1/2/3.
-The MCU sets 20% PWM before enabling 12 V and holds that duty until a manual change.
+Y4 MCU 0.1.48 sets 15% PWM before enabling 12 V. Auto and legacy modes hold
+that duty. Manual mode applies the saved settings with a live host heartbeat
+and returns to 15% on heartbeat timeout. Versions 0.1.43 through 0.1.47 use 20%.
 Physical FAN1 has a separate SoC PWM. UEFI holds it at 50%. With valid temperature
 and tachometer readings, Linux uses 30% below 45 °C, 50% from 45 °C to below
 70 °C, and 100% at 70 °C and above. It uses 100% during its two-second startup
